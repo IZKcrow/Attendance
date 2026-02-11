@@ -1,0 +1,12 @@
+[
+  { "id": 1, "name": "Alice Johnson", "position": "Software Engineer", "department": "Engineering", "email": "alice.johnson@example.com", "phone": "+1 (555) 123-4567" },
+  { "id": 2, "name": "Bob Martinez", "position": "Product Manager", "department": "Product", "email": "bob.martinez@example.com", "phone": "+1 (555) 234-5678" },
+  { "id": 3, "name": "Carla Gomez", "position": "UX Designer", "department": "Design", "email": "carla.gomez@example.com", "phone": "+1 (555) 345-6789" },
+  { "id": 4, "name": "Daniel Lee", "position": "QA Engineer", "department": "Engineering", "email": "daniel.lee@example.com", "phone": "+1 (555) 456-7890" },
+  { "id": 5, "name": "Eva Brown", "position": "HR Specialist", "department": "HR", "email": "eva.brown@example.com", "phone": "+1 (555) 567-8901" },
+  { "id": 6, "name": "Frank Wilson", "position": "DevOps Engineer", "department": "Engineering", "email": "frank.wilson@example.com", "phone": "+1 (555) 678-9012" },
+  { "id": 7, "name": "Grace Kim", "position": "Data Analyst", "department": "Data", "email": "grace.kim@example.com", "phone": "+1 (555) 789-0123" },
+  { "id": 8, "name": "Hassan Ali", "position": "Support Lead", "department": "Support", "email": "hassan.ali@example.com", "phone": "+1 (555) 890-1234" },
+  { "id": 9, "name": "Ivy Chen", "position": "Marketing Manager", "department": "Marketing", "email": "ivy.chen@example.com", "phone": "+1 (555) 901-2345" },
+  { "id": 10, "name": "Jack O'Neill", "position": "Finance Analyst", "department": "Finance", "email": "jack.oneill@example.com", "phone": "+1 (555) 012-3456" }
+]

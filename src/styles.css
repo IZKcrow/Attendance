@@ -1,0 +1,16 @@
+body {
+  font-family: Inter, Roboto, Arial, sans-serif;
+  background: #f5f7fa;
+  margin: 0;
+}
+
+.MuiPaper-root {
+  background: #fff;
+}
+
+/* small responsive tweaks */
+@media (max-width: 600px) {
+  .MuiTableCell-root {
+    font-size: 13px;
+  }
+}
