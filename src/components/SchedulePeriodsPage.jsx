@@ -1,5 +1,6 @@
+//SchedulePeriodsPage.jsx
 import React from 'react'
-import { TableCell } from '@mui/material'
+import { TableCell, Dialog, DialogTitle, DialogContent, DialogActions, Button } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
 
@@ -7,6 +8,7 @@ export default function SchedulePeriodsPage() {
   const [periods, setPeriods] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
+  const [selectedPeriod, setSelectedPeriod] = React.useState(null)
 
   React.useEffect(() => {
     loadPeriods()
@@ -55,26 +57,115 @@ export default function SchedulePeriodsPage() {
     }
   }
 
+  const formatSqlTime = (value) => {
+    if (!value) return 'Not set'
+    if (typeof value === 'string') {
+      if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
+      const d = new Date(value)
+      if (!Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      return value
+    }
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return String(value)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+
+  const formatDayList = (value, dayNames) => {
+    if (dayNames) {
+      return String(dayNames)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join('-')
+    }
+    if (!value) return '-'
+    const dayMap = {
+      1: 'Mon',
+      2: 'Tue',
+      3: 'Wed',
+      4: 'Thu',
+      5: 'Fri',
+      6: 'Sat',
+      7: 'Sun'
+    }
+    const tokens = String(value)
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean)
+    const mapped = tokens.map((t) => {
+      const n = Number(t)
+      if (!Number.isNaN(n) && dayMap[n]) return dayMap[n]
+      const lowered = t.toLowerCase()
+      if (lowered.startsWith('mon')) return 'Mon'
+      if (lowered.startsWith('tue')) return 'Tue'
+      if (lowered.startsWith('wed')) return 'Wed'
+      if (lowered.startsWith('thu')) return 'Thu'
+      if (lowered.startsWith('fri')) return 'Fri'
+      if (lowered.startsWith('sat')) return 'Sat'
+      if (lowered.startsWith('sun')) return 'Sun'
+      return t
+    })
+    return Array.from(new Set(mapped)).join('-')
+  }
+
   return (
-    <GenericDataTable
-      title="Schedule Periods"
-      columns={['EmployeeID', 'PeriodName', 'StartDate', 'EndDate', 'IsActive']}
-      data={periods}
-      loading={loading}
-      error={error}
-      primaryKeyField="SchedulePeriodID"
-      onAdd={handleAdd}
-      onEdit={handleEdit}
-      onDelete={handleDelete}
-      renderRow={(row) => (
-        <>
-          <TableCell>{row.EmployeeID}</TableCell>
-          <TableCell>{row.PeriodName}</TableCell>
-          <TableCell>{row.StartDate}</TableCell>
-          <TableCell>{row.EndDate}</TableCell>
-          <TableCell>{row.IsActive ? 'Yes' : 'No'}</TableCell>
-        </>
-      )}
-    />
+    <>
+      <GenericDataTable
+        title="Schedule Periods"
+        columns={['PeriodName', 'DayList']}
+        data={periods}
+        loading={loading}
+        error={error}
+        primaryKeyField="SchedulePeriodID"
+        readOnly={true}
+        allowDelete={true}
+        allowAdd={false}
+        allowEdit={false}
+        onAdd={handleAdd}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        onRowClick={(row) => setSelectedPeriod(row)}
+        renderRow={(row) => (
+          <>
+            <TableCell>{row.PeriodName}</TableCell>
+            <TableCell>{formatDayList(row.DayList, row.DayNameList)}</TableCell>
+          </>
+        )}
+      />
+
+      <Dialog open={!!selectedPeriod} onClose={() => setSelectedPeriod(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Schedule Details</DialogTitle>
+        <DialogContent dividers>
+          {selectedPeriod && (
+            <div style={{ display: 'grid', gap: 10 }}>
+              <div><strong>Name:</strong> {selectedPeriod.PeriodName}</div>
+              <div><strong>Days:</strong> {formatDayList(selectedPeriod.DayList, selectedPeriod.DayNameList)}</div>
+              <div><strong>Morning:</strong> {formatSqlTime(selectedPeriod.MorningTimeIn)} - {formatSqlTime(selectedPeriod.MorningTimeOut)}</div>
+              <div><strong>Afternoon:</strong> {formatSqlTime(selectedPeriod.AfternoonTimeIn)} - {formatSqlTime(selectedPeriod.AfternoonTimeOut)}</div>
+              <div><strong>Grace Period:</strong> {selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
+              {Array.isArray(selectedPeriod.PatternDetails) && selectedPeriod.PatternDetails.length > 0 && (
+                <div style={{ marginTop: 10 }}>
+                  <strong>Patterns:</strong>
+                  <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
+                    {selectedPeriod.PatternDetails.map((p, idx) => (
+                      <div key={idx} style={{ border: '1px solid #e3e6ee', borderRadius: 8, padding: 8 }}>
+                        <div><strong>{p.PatternName || `Pattern ${idx + 1}`}</strong></div>
+                        <div>Days: {p.DayNameList || formatDayList(p.DayList, '')}</div>
+                        <div>Morning: {formatSqlTime(p.MorningTimeIn)} - {formatSqlTime(p.MorningTimeOut)}</div>
+                        <div>Afternoon: {formatSqlTime(p.AfternoonTimeIn)} - {formatSqlTime(p.AfternoonTimeOut)}</div>
+                        <div>Grace: {p.GracePeriodMinutes ?? selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSelectedPeriod(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+    </>
   )
 }

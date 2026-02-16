@@ -1,15 +1,27 @@
+//BiometricScansPage.jsx
 import React from 'react'
-import { TableCell } from '@mui/material'
+import { TableCell, Box } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import { Bar } from 'react-chartjs-2'
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js'
+import LocalizationProvider from '@mui/lab/LocalizationProvider'
+import DateRangePicker from '@mui/lab/DateRangePicker'
+import AdapterDateFns from '@mui/lab/AdapterDateFns'
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 export default function BiometricScansPage() {
   const [scans, setScans] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
+  const [dateRange, setDateRange] = React.useState([null, null])
 
   React.useEffect(() => {
     loadScans()
+    // auto-refresh every 5 seconds for live feed
+    const iv = setInterval(() => { loadScans() }, 5000)
+    return () => clearInterval(iv)
   }, [])
 
   const loadScans = async () => {
@@ -45,26 +57,95 @@ export default function BiometricScansPage() {
     }
   }
 
+  const filtered = scans.filter(s => {
+    const [start, end] = dateRange
+    if (!start && !end) return true
+    const t = s.ScanTime ? new Date(s.ScanTime) : null
+    if (!t) return true
+    if (start && t < new Date(start)) return false
+    if (end) {
+      const e = new Date(end)
+      e.setHours(23,59,59,999)
+      if (t > e) return false
+    }
+    return true
+  })
+
+  // counts per day chart data
+  const chartData = React.useMemo(() => {
+    const map = {}
+    filtered.forEach(s => {
+      const d = s.ScanTime ? (new Date(s.ScanTime)).toISOString().split('T')[0] : 'unknown'
+      map[d] = (map[d] || 0) + 1
+    })
+    const keys = Object.keys(map).sort()
+    return {
+      labels: keys,
+      datasets: [{ label: 'Scans', data: keys.map(k => map[k]), backgroundColor: '#3f51b5' }]
+    }
+  }, [filtered])
+
   return (
-    <GenericDataTable
-      title="Biometric Scans"
-      columns={['EmployeeID', 'ScanTime', 'ScanType', 'AuthenticationMethod', 'IsSuccessful']}
-      data={scans}
-      loading={loading}
-      error={error}
-      primaryKeyField="BiometricScanID"
-      onAdd={handleAdd}
-      onEdit={() => {}}
-      onDelete={handleDelete}
-      renderRow={(row) => (
-        <>
-          <TableCell>{row.EmployeeID}</TableCell>
-          <TableCell>{row.ScanTime}</TableCell>
-          <TableCell>{row.ScanType}</TableCell>
-          <TableCell>{row.AuthenticationMethod}</TableCell>
-          <TableCell>{row.IsSuccessful ? 'Yes' : 'No'}</TableCell>
-        </>
-      )}
-    />
+    <div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginBottom: 8 }}>
+        <LocalizationProvider dateAdapter={AdapterDateFns}>
+          <DateRangePicker
+            startText="From"
+            endText="To"
+            value={dateRange}
+            onChange={(newValue) => { setDateRange(newValue) }}
+            renderInput={(startProps, endProps) => (
+              <>
+                <input {...startProps.inputProps} type="date" value={startProps.inputProps.value || ''} onChange={(e)=>{
+                  const s = e.target.value ? new Date(e.target.value) : null
+                  setDateRange([s, dateRange[1]])
+                }} />
+                <span style={{ margin: '0 8px' }}>—</span>
+                <input {...endProps.inputProps} type="date" value={endProps.inputProps.value || ''} onChange={(e)=>{
+                  const d = e.target.value ? new Date(e.target.value) : null
+                  setDateRange([dateRange[0], d])
+                }} />
+              </>
+            )}
+          />
+        </LocalizationProvider>
+        <button onClick={()=>{ setDateRange([null, null]); }}>Clear</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ flex: 1 }}>
+          <GenericDataTable
+            title="🔍 Live Biometric Feed"
+            columns={['EmployeeID', 'ScanTime', 'ScanType', 'AuthenticationMethod', 'IsSuccessful', 'Location']}
+            data={filtered}
+            loading={loading}
+            error={error}
+            primaryKeyField="BiometricScanID"
+            readOnly={true}
+            onAdd={() => {}}
+            onEdit={() => {}}
+            onDelete={() => {}}
+            renderRow={(row) => (
+              <>
+                <TableCell>{row.EmployeeID}</TableCell>
+                <TableCell>{row.ScanTime}</TableCell>
+                <TableCell>{row.ScanType}</TableCell>
+                <TableCell>{row.AuthenticationMethod}</TableCell>
+                <TableCell>{row.IsSuccessful ? 'Yes' : 'No'}</TableCell>
+                <TableCell>{row.Latitude && row.Longitude ? `${row.Latitude}, ${row.Longitude}` : ''}</TableCell>
+              </>
+            )}
+          />
+        </div>
+
+        <div style={{ width: 360 }}>
+          <h4>Scan counts</h4>
+          <Box>
+            <Bar data={chartData} options={{ responsive: true, plugins: { legend: { display: false } } }} />
+          </Box>
+        </div>
+      </div>
+    </div>
   )
 }
+

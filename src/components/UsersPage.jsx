@@ -1,5 +1,6 @@
+//UsersPage.jsx
 import React from 'react'
-import { TableCell, Box } from '@mui/material'
+import { TableCell } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
 
@@ -58,7 +59,7 @@ export default function UsersPage() {
   return (
     <GenericDataTable
       title="Users"
-      columns={['FirstName', 'LastName', 'Email', 'Role']}
+      columns={['name', 'position', 'email', 'department']}
       data={users}
       loading={loading}
       error={error}
@@ -68,10 +69,10 @@ export default function UsersPage() {
       onDelete={handleDelete}
       renderRow={(row) => (
         <>
-          <TableCell>{row.FirstName}</TableCell>
-          <TableCell>{row.LastName}</TableCell>
-          <TableCell>{row.Email}</TableCell>
-          <TableCell>{row.Role}</TableCell>
+          <TableCell>{row.name}</TableCell>
+          <TableCell>{row.position}</TableCell>
+          <TableCell>{row.email}</TableCell>
+          <TableCell>{row.department}</TableCell>
         </>
       )}
     />

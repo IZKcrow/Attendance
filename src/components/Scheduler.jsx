@@ -1,82 +1,205 @@
-import React from 'react'
-import { Box, Grid, Typography, Select, MenuItem, Button, Divider } from '@mui/material'
-import * as api from '../api/employees'
-
-const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
-const SHIFTS = ['Off','Morning','Afternoon','Night']
-
-function cellKey(empId, dayIdx) { return `${empId}_${dayIdx}` }
+import React, { useEffect, useMemo, useState } from 'react'
+import {
+  Box,
+  Typography,
+  Grid,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Checkbox,
+  ListItemText,
+  OutlinedInput,
+  TextField,
+  Button,
+  Paper,
+  Chip
+} from '@mui/material'
+import * as api from '../api'
 
 export default function Scheduler() {
-  const [employees, setEmployees] = React.useState([])
-  const [loading, setLoading] = React.useState(true)
-  const [schedule, setSchedule] = React.useState(() => {
-    try { return JSON.parse(localStorage.getItem('schedule_v1') || '{}') } catch { return {} }
-  })
+  const [employees, setEmployees] = useState([])
+  const [shifts, setShifts] = useState([])
+  const [selectedShiftID, setSelectedShiftID] = useState('')
+  const [selectedEmployeeIDs, setSelectedEmployeeIDs] = useState([])
+  const [assignAll, setAssignAll] = useState(false)
+  const [effectiveFrom, setEffectiveFrom] = useState(() => new Date().toISOString().split('T')[0])
+  const [effectiveTo, setEffectiveTo] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
 
-  React.useEffect(() => {
+  useEffect(() => {
     let mounted = true
-    setLoading(true)
-    api.fetchEmployees()
-      .then(data => { if (!mounted) return; setEmployees(Array.isArray(data) ? data : []) })
-      .catch(() => setEmployees([]))
-      .finally(() => mounted && setLoading(false))
+    Promise.all([api.fetchEmployees(), api.fetchShiftDefinitions()])
+      .then(([empData, shiftData]) => {
+        if (!mounted) return
+        setEmployees(Array.isArray(empData) ? empData : [])
+        setShifts(Array.isArray(shiftData) ? shiftData : [])
+      })
+      .finally(() => {
+        if (mounted) setLoading(false)
+      })
     return () => { mounted = false }
   }, [])
 
-  const setShift = (empId, dayIdx, shift) => {
-    setSchedule(prev => {
-      const copy = { ...prev }
-      copy[cellKey(empId, dayIdx)] = shift
-      return copy
-    })
+  const selectedShift = useMemo(
+    () => shifts.find((s) => s.ShiftID === selectedShiftID),
+    [shifts, selectedShiftID]
+  )
+
+  const fmtTime = (value) => {
+    if (!value) return 'Not set'
+    if (typeof value === 'string') {
+      if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
+      const d = new Date(value)
+      if (!Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      return value
+    }
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return String(value)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
   }
 
-  const save = () => {
-    localStorage.setItem('schedule_v1', JSON.stringify(schedule))
+  const fmtDays = (shift) => {
+    if (shift?.DayNameList) {
+      return String(shift.DayNameList)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join('-')
+    }
+    return shift?.DayList || '-'
   }
 
-  const clear = () => { setSchedule({}); localStorage.removeItem('schedule_v1') }
+  const canSubmit = selectedShiftID && (assignAll || selectedEmployeeIDs.length > 0)
+
+  const handleAssign = async () => {
+    if (!canSubmit) return
+    setSaving(true)
+    try {
+      await api.assignShiftToEmployees({
+        shiftID: selectedShiftID,
+        employeeIDs: selectedEmployeeIDs,
+        assignAll,
+        effectiveFrom: effectiveFrom || null,
+        effectiveTo: effectiveTo || null
+      })
+      alert('Shift assignment saved successfully.')
+      if (!assignAll) setSelectedEmployeeIDs([])
+    } catch (err) {
+      alert('Assignment failed: ' + (err.message || err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <div>Loading scheduler...</div>
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6">Weekly Schedule</Typography>
-        <Box>
-          <Button onClick={save} variant="contained" sx={{ mr: 1 }}>Save</Button>
-          <Button onClick={clear}>Clear</Button>
-        </Box>
-      </Box>
+      <Typography variant="h5" gutterBottom>Shift Assignment</Typography>
+      <Typography variant="body2" sx={{ mb: 3, color: 'text.secondary' }}>
+        Create Shift defines the schedule template. This page assigns that existing shift to one, many, or all employees.
+      </Typography>
 
-      <Divider sx={{ mb: 2 }} />
-
-      <Grid container spacing={1} sx={{ maxHeight: '60vh', overflow: 'auto' }}>
-        <Grid item xs={3} sx={{ borderRight: '1px solid #eee', p: 1 }}>
-          <Box sx={{ fontWeight: 600, mb: 1 }}>Employee</Box>
-          {loading && <div>Loading...</div>}
-          {!loading && employees.map(e => (
-            <Box key={e.id} sx={{ py: 1, borderBottom: '1px solid #f0f0f0' }}>{e.name}</Box>
-          ))}
+      <Grid container spacing={3}>
+        <Grid item xs={12} md={6}>
+          <FormControl fullWidth>
+            <InputLabel id="shift-label">Shift</InputLabel>
+            <Select
+              labelId="shift-label"
+              value={selectedShiftID}
+              label="Shift"
+              onChange={(e) => setSelectedShiftID(e.target.value)}
+            >
+              {shifts.map((s) => (
+                <MenuItem key={s.ShiftID} value={s.ShiftID}>
+                  {s.ShiftName}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
         </Grid>
 
-        {DAYS.map((d, di) => (
-          <Grid item xs key={d} sx={{ p: 1, borderRight: '1px solid #f5f5f5' }}>
-            <Box sx={{ fontWeight: 600, mb: 1 }}>{d}</Box>
-            {employees.map(emp => (
-              <Box key={cellKey(emp.id, di)} sx={{ mb: 1 }}>
-                <Select
-                  fullWidth
-                  size="small"
-                  value={schedule[cellKey(emp.id, di)] || 'Off'}
-                  onChange={(ev) => setShift(emp.id, di, ev.target.value)}
-                >
-                  {SHIFTS.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-                </Select>
-              </Box>
-            ))}
-          </Grid>
-        ))}
+        <Grid item xs={12} md={6}>
+          <FormControl fullWidth>
+            <InputLabel id="employees-label">Employees</InputLabel>
+            <Select
+              labelId="employees-label"
+              multiple
+              value={selectedEmployeeIDs}
+              input={<OutlinedInput label="Employees" />}
+              onChange={(e) => setSelectedEmployeeIDs(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
+              disabled={assignAll}
+              renderValue={(selected) => `${selected.length} selected`}
+            >
+              {employees.map((emp) => (
+                <MenuItem key={emp.id} value={emp.id}>
+                  <Checkbox checked={selectedEmployeeIDs.indexOf(emp.id) > -1} />
+                  <ListItemText primary={`${emp.EmployeeCode || ''} - ${emp.name || ''}`} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
+            <Button size="small" variant="outlined" onClick={() => setSelectedEmployeeIDs(employees.map((e) => e.id))} disabled={assignAll}>
+              Select All Employees
+            </Button>
+            <Button size="small" variant="outlined" onClick={() => setSelectedEmployeeIDs([])} disabled={assignAll}>
+              Clear
+            </Button>
+            <Button
+              size="small"
+              variant={assignAll ? 'contained' : 'outlined'}
+              onClick={() => setAssignAll((prev) => !prev)}
+            >
+              {assignAll ? 'Assigning To All' : 'Assign To All'}
+            </Button>
+          </Box>
+        </Grid>
+
+        <Grid item xs={12} md={6}>
+          <TextField
+            fullWidth
+            type="date"
+            label="Effective From"
+            value={effectiveFrom}
+            onChange={(e) => setEffectiveFrom(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+        </Grid>
+        <Grid item xs={12} md={6}>
+          <TextField
+            fullWidth
+            type="date"
+            label="Effective To (optional)"
+            value={effectiveTo}
+            onChange={(e) => setEffectiveTo(e.target.value)}
+            InputLabelProps={{ shrink: true }}
+          />
+        </Grid>
       </Grid>
+
+      {selectedShift && (
+        <Paper sx={{ p: 2, mt: 3 }}>
+          <Typography variant="subtitle1" sx={{ mb: 1 }}>
+            Selected Shift Preview
+          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            <Chip label={`Name: ${selectedShift.ShiftName}`} />
+            <Chip label={`AM: ${fmtTime(selectedShift.MorningTimeIn)} - ${fmtTime(selectedShift.MorningTimeOut)}`} />
+            <Chip label={`PM: ${fmtTime(selectedShift.AfternoonTimeIn)} - ${fmtTime(selectedShift.AfternoonTimeOut)}`} />
+            <Chip label={`Grace: ${selectedShift.GracePeriodMinutes || 0} min`} />
+            <Chip label={`Days: ${fmtDays(selectedShift)}`} />
+          </Box>
+        </Paper>
+      )}
+
+      <Box sx={{ mt: 3 }}>
+        <Button variant="contained" disabled={!canSubmit || saving} onClick={handleAssign}>
+          {saving ? 'Assigning...' : 'Assign Shift'}
+        </Button>
+      </Box>
     </Box>
   )
 }

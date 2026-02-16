@@ -1,7 +1,8 @@
+//Sidebar.jsx
 import React from 'react'
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
-  Tooltip, useTheme
+  Tooltip
 } from '@mui/material'
 import PeopleIcon from '@mui/icons-material/People'
 import EventNoteIcon from '@mui/icons-material/EventNote'
@@ -17,6 +18,7 @@ const MENU_ITEMS = [
   { id: 'users', label: 'Users', icon: BusinessIcon },
   { id: 'schedule-periods', label: 'Schedule Periods', icon: AssignmentIcon },
   { id: 'schedule-details', label: 'Schedule Details', icon: EventNoteIcon },
+  { id: 'schedule', label: 'Scheduler', icon: EventNoteIcon },
   { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
   { id: 'biometric', label: 'Biometric Scans', icon: VisibilityIcon },
   { id: 'special-days', label: 'Special Days', icon: LogoutIcon },

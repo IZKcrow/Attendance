@@ -1,3 +1,4 @@
+//SpecialDaysPage.jsx
 import React from 'react'
 import { TableCell } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
@@ -63,6 +64,7 @@ export default function SpecialDaysPage() {
       loading={loading}
       error={error}
       primaryKeyField="SpecialDayID"
+      readOnly={true}
       onAdd={handleAdd}
       onEdit={handleEdit}
       onDelete={handleDelete}

@@ -1,5 +1,15 @@
 import React from 'react'
-import { Box, Container, Paper, Typography } from '@mui/material'
+import {
+  Box,
+  Container,
+  Paper,
+  Typography,
+  AppBar,
+  Toolbar,
+  IconButton
+} from '@mui/material'
+import MenuIcon from '@mui/icons-material/Menu'
+
 import Sidebar from './Sidebar'
 import EmployeeTable from './EmployeeTable'
 import Scheduler from './Scheduler'
@@ -13,7 +23,9 @@ import SpecialDaysPage from './SpecialDaysPage'
 
 export default function Dashboard() {
   const [currentPage, setCurrentPage] = React.useState('employees')
-  const [sidebarExpanded, setSidebarExpanded] = React.useState(false)
+  const [sidebarExpanded, setSidebarExpanded] = React.useState(true)
+
+  const drawerWidth = sidebarExpanded ? 240 : 80
 
   const renderPage = () => {
     switch (currentPage) {
@@ -40,24 +52,76 @@ export default function Dashboard() {
     }
   }
 
+  const formatTitle = (text) =>
+    text
+      .split('-')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+
   return (
     <Box sx={{ display: 'flex' }}>
-      <Box
-        onMouseEnter={() => setSidebarExpanded(true)}
-        onMouseLeave={() => setSidebarExpanded(false)}
-      >
-        <Sidebar onMenuClick={setCurrentPage} expanded={sidebarExpanded} />
-      </Box>
+      
+      {/* Sidebar */}
+      <Sidebar
+        expanded={sidebarExpanded}
+        activeMenu={currentPage}
+        onMenuClick={setCurrentPage}
+      />
 
-      <Box sx={{ flex: 1, p: 3, backgroundColor: '#f5f5f5', minHeight: '100vh' }}>
-        <Container maxWidth="lg">
-          <Paper sx={{ p: 3 }} elevation={2}>
-            <Typography variant="h5" gutterBottom sx={{ textTransform: 'capitalize' }}>
-              {currentPage.replace('-', ' ')}
+      {/* Main Content Area */}
+      <Box
+        sx={{
+          flexGrow: 1,
+          ml: `${drawerWidth}px`,
+          transition: 'margin 0.3s ease',
+          backgroundColor: '#f4f6f8',
+          minHeight: '100vh'
+        }}
+      >
+        {/* Top AppBar */}
+        <AppBar
+          position="fixed"
+          elevation={0}
+          sx={{
+            ml: `${drawerWidth}px`,
+            width: `calc(100% - ${drawerWidth}px)`,
+            backgroundColor: '#fff',
+            color: '#000',
+            borderBottom: '1px solid #e0e0e0',
+            transition: 'all 0.3s ease'
+          }}
+        >
+          <Toolbar>
+            <IconButton
+              edge="start"
+              onClick={() => setSidebarExpanded(prev => !prev)}
+              sx={{ mr: 2 }}
+            >
+              <MenuIcon />
+            </IconButton>
+
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              {formatTitle(currentPage)}
             </Typography>
-            {renderPage()}
-          </Paper>
-        </Container>
+          </Toolbar>
+        </AppBar>
+
+        {/* Page Content */}
+        <Box sx={{ mt: 10, px: 4 }}>
+          <Container maxWidth="xl">
+            <Paper
+              elevation={0}
+              sx={{
+                p: 4,
+                borderRadius: 3,
+                backgroundColor: '#fff',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.05)'
+              }}
+            >
+              {renderPage()}
+            </Paper>
+          </Container>
+        </Box>
       </Box>
     </Box>
   )

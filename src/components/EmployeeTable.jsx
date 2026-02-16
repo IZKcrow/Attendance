@@ -1,3 +1,4 @@
+//EmployeeTable.jsx
 import React from 'react'
 import {
   Table,
@@ -22,10 +23,11 @@ import {
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
+import DeleteIcon from '@mui/icons-material/Delete'
 import EmployeeDialog from './EmployeeDialog'
 import * as api from '../api/employees'
 
-function EmployeeRow({ e, onEdit }) {
+function EmployeeRow({ e, onEdit, onDelete }) {
   return (
     <TableRow hover>
       <TableCell>
@@ -39,11 +41,17 @@ function EmployeeRow({ e, onEdit }) {
       </TableCell>
       <TableCell>{e.position}</TableCell>
       <TableCell>{e.department}</TableCell>
+      <TableCell>{e.assignedShift || 'N/A'}</TableCell>
       <TableCell>{e.phone}</TableCell>
       <TableCell align="right">
         <Tooltip title="Edit">
           <IconButton size="small" onClick={() => onEdit(e)}>
             <EditIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Delete">
+          <IconButton size="small" onClick={() => onDelete && onDelete(e.id)}>
+            <DeleteIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       </TableCell>
@@ -87,7 +95,10 @@ export default function EmployeeTable() {
   const filtered = employees.filter(e => {
     const q = query.trim().toLowerCase()
     const matchesQuery =
-      !q || e.name.toLowerCase().includes(q) || e.position.toLowerCase().includes(q)
+      !q ||
+      e.name.toLowerCase().includes(q) ||
+      e.position.toLowerCase().includes(q) ||
+      (e.assignedShift || '').toLowerCase().includes(q)
     const matchesDept = department === 'All' || e.department === department
     return matchesQuery && matchesDept
   })
@@ -166,6 +177,7 @@ export default function EmployeeTable() {
               <TableCell>Employee</TableCell>
               <TableCell>Position</TableCell>
               <TableCell>Department</TableCell>
+              <TableCell>Assigned Shift</TableCell>
               <TableCell>Phone</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
@@ -173,15 +185,15 @@ export default function EmployeeTable() {
           <TableBody>
             {loading && (
               <TableRow>
-                <TableCell colSpan={5} align="center">Loading...</TableCell>
+                <TableCell colSpan={6} align="center">Loading...</TableCell>
               </TableRow>
             )}
             {!loading && filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map(e => (
-              <EmployeeRow key={e.id} e={e} onEdit={openEdit} />
+              <EmployeeRow key={e.id} e={e} onEdit={openEdit} onDelete={handleDelete} />
             ))}
             {!loading && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} align="center">No employees found</TableCell>
+                <TableCell colSpan={6} align="center">No employees found</TableCell>
               </TableRow>
             )}
           </TableBody>
