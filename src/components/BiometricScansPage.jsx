@@ -9,6 +9,41 @@ import LocalizationProvider from '@mui/lab/LocalizationProvider'
 import DateRangePicker from '@mui/lab/DateRangePicker'
 import AdapterDateFns from '@mui/lab/AdapterDateFns'
 
+function fmtDate(value) {
+  if (!value) return '-'
+  if (typeof value === 'string') {
+    const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}/)
+    if (isoMatch) return isoMatch[1] // keep server-provided date, no TZ shift
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  }
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  return d.toISOString().slice(0, 10)
+}
+
+function fmtTime(value) {
+  if (!value) return '-'
+  if (typeof value === 'string') {
+    const isoMatch = value.match(/^[^T]*T?(\d{2}:\d{2})(?::\d{2})?/)
+    if (isoMatch) return isoMatch[1] // use server time portion as-is
+    if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
+  }
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function fmtDateTime(value) {
+  if (!value) return '-'
+  const date = fmtDate(value)
+  const time = fmtTime(value)
+  if (date === '-' && time === '-') return '-'
+  if (date === '-') return time
+  if (time === '-') return date
+  return `${date} ${time}`
+}
+
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 export default function BiometricScansPage() {
@@ -128,7 +163,7 @@ export default function BiometricScansPage() {
             renderRow={(row) => (
               <>
                 <TableCell>{row.EmployeeID}</TableCell>
-                <TableCell>{row.ScanTime}</TableCell>
+                <TableCell>{fmtDateTime(row.ScanTime)}</TableCell>
                 <TableCell>{row.ScanType}</TableCell>
                 <TableCell>{row.AuthenticationMethod}</TableCell>
                 <TableCell>{row.IsSuccessful ? 'Yes' : 'No'}</TableCell>
@@ -148,4 +183,3 @@ export default function BiometricScansPage() {
     </div>
   )
 }
-

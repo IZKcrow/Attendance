@@ -9,6 +9,39 @@ import LocalizationProvider from '@mui/lab/LocalizationProvider'
 import DateRangePicker from '@mui/lab/DateRangePicker'
 import AdapterDateFns from '@mui/lab/AdapterDateFns'
 
+function fmtDate(value) {
+  if (!value) return '-'
+  if (typeof value === 'string') {
+    const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}/)
+    if (isoMatch) return isoMatch[1]
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  }
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  return d.toISOString().slice(0, 10)
+}
+
+function fmtTime(value) {
+  if (!value) return '-'
+  if (typeof value === 'string') {
+    const isoMatch = value.match(/^[^T]*T?(\d{2}:\d{2})(?::\d{2})?/)
+    if (isoMatch) return isoMatch[1]
+    if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
+  }
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function fmtDateTime(value) {
+  const date = fmtDate(value)
+  const time = fmtTime(value)
+  if (date === '-' && time === '-') return '-'
+  if (date === '-') return time
+  if (time === '-') return date
+  return `${date} ${time}`
+}
+
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 export default function AuditLogsPage() {
@@ -102,7 +135,7 @@ export default function AuditLogsPage() {
               <>
                 <TableCell>{row.Action}</TableCell>
                 <TableCell>{row.TableName}</TableCell>
-                <TableCell>{row.CreatedAt}</TableCell>
+                <TableCell>{fmtDateTime(row.CreatedAt)}</TableCell>
               </>
             )}
           />

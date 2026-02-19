@@ -12,14 +12,18 @@ import BusinessIcon from '@mui/icons-material/Business'
 import VisibilityIcon from '@mui/icons-material/Visibility'
 import LogoutIcon from '@mui/icons-material/Logout'
 import HistoryIcon from '@mui/icons-material/History'
+import DevicesOtherIcon from '@mui/icons-material/DevicesOther'
+import InsightsIcon from '@mui/icons-material/Insights'
 
 const MENU_ITEMS = [
   { id: 'employees', label: 'Employees', icon: PeopleIcon },
   { id: 'users', label: 'Users', icon: BusinessIcon },
+  { id: 'devices', label: 'Devices', icon: DevicesOtherIcon },
   { id: 'schedule-periods', label: 'Schedule Periods', icon: AssignmentIcon },
   { id: 'schedule-details', label: 'Schedule Details', icon: EventNoteIcon },
   { id: 'schedule', label: 'Scheduler', icon: EventNoteIcon },
   { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
+  { id: 'attendance-report', label: 'Attendance Report', icon: InsightsIcon },
   { id: 'biometric', label: 'Biometric Scans', icon: VisibilityIcon },
   { id: 'special-days', label: 'Special Days', icon: LogoutIcon },
   { id: 'audit-logs', label: 'Audit Logs', icon: HistoryIcon }

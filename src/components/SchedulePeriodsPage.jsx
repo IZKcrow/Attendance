@@ -10,6 +10,14 @@ export default function SchedulePeriodsPage() {
   const [error, setError] = React.useState(null)
   const [selectedPeriod, setSelectedPeriod] = React.useState(null)
 
+  const cardSx = {
+    border: '1px solid #d6deed',
+    borderRadius: 10,
+    padding: 12,
+    background: '#f9fbff',
+    boxShadow: '0 6px 16px rgba(15,31,61,0.08)'
+  }
+
   React.useEffect(() => {
     loadPeriods()
   }, [])
@@ -133,27 +141,35 @@ export default function SchedulePeriodsPage() {
         )}
       />
 
-      <Dialog open={!!selectedPeriod} onClose={() => setSelectedPeriod(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Schedule Details</DialogTitle>
-        <DialogContent dividers>
+      <Dialog
+        open={!!selectedPeriod}
+        onClose={() => setSelectedPeriod(null)}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: { background: '#e7ecf5', borderRadius: 14, border: '1px solid #c8d5ec' }
+        }}
+      >
+        <DialogTitle sx={{ color: '#0f1f3d', fontWeight: 700 }}>Schedule Details</DialogTitle>
+        <DialogContent dividers sx={{ borderColor: '#c8d5ec', background: '#f4f7ff' }}>
           {selectedPeriod && (
-            <div style={{ display: 'grid', gap: 10 }}>
+            <div style={{ display: 'grid', gap: 12, color: '#0b1021' }}>
               <div><strong>Name:</strong> {selectedPeriod.PeriodName}</div>
               <div><strong>Days:</strong> {formatDayList(selectedPeriod.DayList, selectedPeriod.DayNameList)}</div>
               <div><strong>Morning:</strong> {formatSqlTime(selectedPeriod.MorningTimeIn)} - {formatSqlTime(selectedPeriod.MorningTimeOut)}</div>
               <div><strong>Afternoon:</strong> {formatSqlTime(selectedPeriod.AfternoonTimeIn)} - {formatSqlTime(selectedPeriod.AfternoonTimeOut)}</div>
               <div><strong>Grace Period:</strong> {selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
               {Array.isArray(selectedPeriod.PatternDetails) && selectedPeriod.PatternDetails.length > 0 && (
-                <div style={{ marginTop: 10 }}>
-                  <strong>Patterns:</strong>
-                  <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
+                <div style={{ marginTop: 8 }}>
+                  <strong style={{ color: '#0f1f3d' }}>Patterns:</strong>
+                  <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
                     {selectedPeriod.PatternDetails.map((p, idx) => (
-                      <div key={idx} style={{ border: '1px solid #e3e6ee', borderRadius: 8, padding: 8 }}>
-                        <div><strong>{p.PatternName || `Pattern ${idx + 1}`}</strong></div>
-                        <div>Days: {p.DayNameList || formatDayList(p.DayList, '')}</div>
+                      <div key={idx} style={{ ...cardSx, borderColor: '#3cc4bf40' }}>
+                        <div style={{ color: '#0f1f3d', fontWeight: 700 }}>{p.PatternName || `Pattern ${idx + 1}`}</div>
+                        <div style={{ color: '#4a5672' }}>Days: {p.DayNameList || formatDayList(p.DayList, '')}</div>
                         <div>Morning: {formatSqlTime(p.MorningTimeIn)} - {formatSqlTime(p.MorningTimeOut)}</div>
                         <div>Afternoon: {formatSqlTime(p.AfternoonTimeIn)} - {formatSqlTime(p.AfternoonTimeOut)}</div>
-                        <div>Grace: {p.GracePeriodMinutes ?? selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
+                        <div style={{ color: '#4a5672' }}>Grace: {p.GracePeriodMinutes ?? selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
                       </div>
                     ))}
                   </div>
@@ -162,8 +178,19 @@ export default function SchedulePeriodsPage() {
             </div>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSelectedPeriod(null)}>Close</Button>
+        <DialogActions sx={{ background: '#e7ecf5', borderTop: '1px solid #c8d5ec' }}>
+          <Button
+            onClick={() => setSelectedPeriod(null)}
+            variant="contained"
+            sx={{
+              background: '#3cc4bf',
+              color: '#0b1021',
+              fontWeight: 700,
+              ':hover': { background: '#35b3af' }
+            }}
+          >
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
     </>

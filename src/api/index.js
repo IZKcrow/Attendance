@@ -87,11 +87,45 @@ export async function fetchAttendanceToday() {
   return fetchAll('attendance/today')
 }
 
+export async function fetchAttendanceByRange(from, to) {
+  const res = await fetch(`${BASE}/attendance/range`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to })
+  })
+  return handleRes(res)
+}
+
 export async function recordAttendance(employeeCode, logType = 'MORNING_IN') {
   const res = await fetch(`${BASE}/attendance/log`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ employeeCode, logType })
+  })
+  return handleRes(res)
+}
+
+export async function faceScanAttendance({
+  employeeCode,
+  deviceCode = null,
+  matchScore = null,
+  rawImageRef = null,
+  latitude = null,
+  longitude = null,
+  actor = null
+}) {
+  const res = await fetch(`${BASE}/face-scan/recognize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      employeeCode,
+      deviceCode,
+      matchScore,
+      rawImageRef,
+      latitude,
+      longitude,
+      actor
+    })
   })
   return handleRes(res)
 }
@@ -118,6 +152,64 @@ export async function deleteAttendanceRecord() {
   throw new Error('Attendance delete is not supported in current backend.')
 }
 
+
+
+export async function fetchDevices() {
+  return fetchAll('devices')
+}
+
+export async function createDevice({
+  deviceCode,
+  deviceName,
+  deviceType = null,
+  serialNumber = null,
+  locationName = null,
+  latitude = null,
+  longitude = null,
+  isActive = true,
+  registeredBy = null
+}) {
+  return createRecord('devices', {
+    DeviceCode: deviceCode,
+    DeviceName: deviceName,
+    DeviceType: deviceType,
+    SerialNumber: serialNumber,
+    LocationName: locationName,
+    Latitude: latitude,
+    Longitude: longitude,
+    IsActive: isActive,
+    RegisteredBy: registeredBy
+  })
+}
+export async function registerDeviceConnection({
+  deviceCode,
+  deviceName = null,
+  deviceType = 'KIOSK',
+  serialNumber = null,
+  locationName = null,
+  latitude = null,
+  longitude = null,
+  registeredBy = null
+}) {
+  return createRecord('devices/register-connection', {
+    DeviceCode: deviceCode,
+    DeviceName: deviceName,
+    DeviceType: deviceType,
+    SerialNumber: serialNumber,
+    LocationName: locationName,
+    Latitude: latitude,
+    Longitude: longitude,
+    RegisteredBy: registeredBy
+  })
+}
+
+export async function sendDeviceHeartbeat({ deviceCode = null, deviceID = null, actor = null }) {
+  return createRecord('devices/heartbeat', {
+    DeviceCode: deviceCode,
+    DeviceID: deviceID,
+    Actor: actor
+  })
+}
 export async function fetchBiometricScans() {
   return fetchAll('biometric-scans')
 }
@@ -253,3 +345,5 @@ export async function assignShiftToEmployees({
     effectiveTo
   })
 }
+
+

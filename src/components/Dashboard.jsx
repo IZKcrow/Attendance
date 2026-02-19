@@ -20,12 +20,12 @@ import SchedulePeriodsPage from './SchedulePeriodsPage'
 import ScheduleDetailsPage from './ScheduleDetailsPage'
 import AuditLogsPage from './AuditLogsPage'
 import SpecialDaysPage from './SpecialDaysPage'
+import DevicesPage from './DevicesPage'
+import AttendanceReportPage from './AttendanceReportPage'
 
 export default function Dashboard() {
   const [currentPage, setCurrentPage] = React.useState('employees')
   const [sidebarExpanded, setSidebarExpanded] = React.useState(true)
-
-  const drawerWidth = sidebarExpanded ? 240 : 80
 
   const renderPage = () => {
     switch (currentPage) {
@@ -33,12 +33,16 @@ export default function Dashboard() {
         return <EmployeeTable />
       case 'users':
         return <UsersPage />
+      case 'devices':
+        return <DevicesPage />
       case 'schedule-periods':
         return <SchedulePeriodsPage />
       case 'schedule-details':
         return <ScheduleDetailsPage />
       case 'attendance':
         return <AttendanceRecordsPage />
+      case 'attendance-report':
+        return <AttendanceReportPage />
       case 'biometric':
         return <BiometricScansPage />
       case 'special-days':
@@ -72,23 +76,19 @@ export default function Dashboard() {
       <Box
         sx={{
           flexGrow: 1,
-          ml: `${drawerWidth}px`,
-          transition: 'margin 0.3s ease',
           backgroundColor: '#f4f6f8',
           minHeight: '100vh'
         }}
       >
         {/* Top AppBar */}
         <AppBar
-          position="fixed"
+          position="sticky"
           elevation={0}
           sx={{
-            ml: `${drawerWidth}px`,
-            width: `calc(100% - ${drawerWidth}px)`,
             backgroundColor: '#fff',
             color: '#000',
             borderBottom: '1px solid #e0e0e0',
-            transition: 'all 0.3s ease'
+            zIndex: 1
           }}
         >
           <Toolbar>
@@ -107,15 +107,16 @@ export default function Dashboard() {
         </AppBar>
 
         {/* Page Content */}
-        <Box sx={{ mt: 10, px: 4 }}>
-          <Container maxWidth="xl">
+        <Box sx={{ px: { xs: 1.5, md: 3 }, py: 2 }}>
+          <Container maxWidth={false} disableGutters>
             <Paper
               elevation={0}
               sx={{
-                p: 4,
+                p: { xs: 1.5, md: 3 },
                 borderRadius: 3,
                 backgroundColor: '#fff',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.05)'
+                boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+                width: '100%'
               }}
             >
               {renderPage()}

@@ -26,6 +26,7 @@ export default function GenericDataTable({
   allowDelete = !readOnly,
   onRowClick = null
 }) {
+  const showActions = allowEdit || allowDelete
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editing, setEditing] = React.useState(null)
   const [form, setForm] = React.useState({})
@@ -61,17 +62,28 @@ export default function GenericDataTable({
 
       {error && <Alert severity="error">{error}</Alert>}
 
-      <TableContainer component={Paper}>
-        <Table>
+      <TableContainer
+        component={Paper}
+        sx={{
+          width: '100%',
+          overflowX: 'auto',
+          '& th, & td': {
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+            verticalAlign: 'top'
+          }
+        }}
+      >
+        <Table sx={{ width: '100%' }}>
           <TableHead>
             <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
               {columns.map(col => <TableCell key={col}><strong>{col}</strong></TableCell>)}
-              <TableCell align="right"><strong>Actions</strong></TableCell>
+              {showActions && <TableCell align="right" sx={{ minWidth: 110 }}><strong>Actions</strong></TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
-            {loading && <TableRow><TableCell colSpan={columns.length + 1} align="center"><CircularProgress /></TableCell></TableRow>}
-            {!loading && data.length === 0 && <TableRow><TableCell colSpan={columns.length + 1} align="center">No data</TableCell></TableRow>}
+            {loading && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center"><CircularProgress /></TableCell></TableRow>}
+            {!loading && data.length === 0 && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center">No data</TableCell></TableRow>}
             {!loading && data.map((row) => (
               <TableRow
                 key={row[primaryKeyField]}
@@ -80,8 +92,9 @@ export default function GenericDataTable({
                 sx={onRowClick ? { cursor: 'pointer' } : undefined}
               >
                 {renderRow(row)}
+                {showActions && (
                 <TableCell align="right">
-                  {(allowEdit || allowDelete) && (
+                  {(
                     <>
                       {allowEdit && (
                         <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}><EditIcon fontSize="small" /></IconButton>
@@ -92,6 +105,7 @@ export default function GenericDataTable({
                     </>
                   )}
                 </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

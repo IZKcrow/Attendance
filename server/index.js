@@ -101,6 +101,29 @@ function toTimeLiteral(value) {
   return null
 }
 
+async function writeAuditLog(pool, payload) {
+  try {
+    const req = pool.request()
+    req.input('AuditLogID', sql.NVarChar(36), require('crypto').randomUUID())
+    req.input('Actor', sql.NVarChar(100), payload?.actor || null)
+    req.input('Action', sql.NVarChar(100), payload?.action || 'UNKNOWN')
+    req.input('TableName', sql.NVarChar(128), payload?.tableName || 'UNKNOWN')
+    req.input('RecordID', sql.NVarChar(100), payload?.recordID || null)
+    req.input('BeforeJson', sql.NVarChar(sql.MAX), payload?.beforeJson || null)
+    req.input('AfterJson', sql.NVarChar(sql.MAX), payload?.afterJson || null)
+    req.input('DeviceID', sql.NVarChar(36), payload?.deviceID || null)
+    req.input('IPAddress', sql.NVarChar(64), payload?.ipAddress || null)
+    await req.query(`
+      INSERT INTO dbo.AuditLogs
+      (AuditLogID, Actor, Action, TableName, RecordID, BeforeJson, AfterJson, DeviceID, IPAddress)
+      VALUES
+      (@AuditLogID, @Actor, @Action, @TableName, @RecordID, @BeforeJson, @AfterJson, @DeviceID, @IPAddress)
+    `)
+  } catch (_) {
+    // Do not block business flow if audit logging fails.
+  }
+}
+
 async function initDbIfNeeded(pool) {
   // Create FlexiAttendanceSystem schema tables if they don't exist
   // Split into separate statements to avoid SQL batch issues
@@ -209,6 +232,106 @@ BEGIN
   END
 END`,
 
+    // Devices (scanner terminals / mobile clients)
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Devices' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.Devices (
+    DeviceID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    DeviceCode NVARCHAR(100) NOT NULL UNIQUE,
+    DeviceName NVARCHAR(150) NOT NULL,
+    DeviceType NVARCHAR(50) NULL,
+    SerialNumber NVARCHAR(100) NULL,
+    LocationName NVARCHAR(150) NULL,
+    Latitude DECIMAL(10,7) NULL,
+    Longitude DECIMAL(10,7) NULL,
+    IsActive BIT NOT NULL DEFAULT 1,
+    RegisteredAt DATETIME NOT NULL DEFAULT GETDATE(),
+    RegisteredBy NVARCHAR(100) NULL,
+    LastSeenAt DATETIME NULL,
+    UpdatedAt DATETIME NULL
+  )
+END`,
+
+    // Face profiles (embedding storage)
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FaceProfiles' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.FaceProfiles (
+    FaceProfileID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NOT NULL,
+    EmbeddingText NVARCHAR(MAX) NOT NULL,
+    ModelVersion NVARCHAR(50) NULL,
+    QualityScore DECIMAL(5,2) NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
+    IsActive BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    CreatedBy NVARCHAR(100) NULL,
+    UpdatedAt DATETIME NULL,
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID) ON DELETE CASCADE
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_FaceProfiles_EmployeeID' AND object_id = OBJECT_ID('dbo.FaceProfiles'))
+  BEGIN
+    CREATE INDEX IX_FaceProfiles_EmployeeID ON dbo.FaceProfiles(EmployeeID, IsActive)
+  END
+END`,
+
+    // Biometric scans (face scan attempts and outcomes)
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'BiometricScans' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.BiometricScans (
+    BiometricScanID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NULL,
+    DeviceID UNIQUEIDENTIFIER NULL,
+    ScanTime DATETIME NOT NULL DEFAULT GETDATE(),
+    ScanType NVARCHAR(50) NOT NULL DEFAULT 'FACE',
+    AuthenticationMethod NVARCHAR(50) NOT NULL DEFAULT 'FACE_MATCH',
+    MatchScore DECIMAL(5,2) NULL,
+    ScanResult NVARCHAR(30) NOT NULL DEFAULT 'SUCCESS',
+    IsSuccessful BIT NOT NULL DEFAULT 1,
+    FailureReason NVARCHAR(255) NULL,
+    RawImageRef NVARCHAR(500) NULL,
+    LivenessScore DECIMAL(5,2) NULL,
+    Latitude DECIMAL(10,7) NULL,
+    Longitude DECIMAL(10,7) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID),
+    FOREIGN KEY (DeviceID) REFERENCES dbo.Devices(DeviceID)
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_BiometricScans_ScanTime' AND object_id = OBJECT_ID('dbo.BiometricScans'))
+  BEGIN
+    CREATE INDEX IX_BiometricScans_ScanTime ON dbo.BiometricScans(ScanTime DESC)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_BiometricScans_EmployeeID' AND object_id = OBJECT_ID('dbo.BiometricScans'))
+  BEGIN
+    CREATE INDEX IX_BiometricScans_EmployeeID ON dbo.BiometricScans(EmployeeID, ScanTime DESC)
+  END
+END`,
+
+    // Audit logs (generic audit trail)
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AuditLogs' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AuditLogs (
+    AuditLogID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    Actor NVARCHAR(100) NULL,
+    Action NVARCHAR(100) NOT NULL,
+    TableName NVARCHAR(128) NOT NULL,
+    RecordID NVARCHAR(100) NULL,
+    BeforeJson NVARCHAR(MAX) NULL,
+    AfterJson NVARCHAR(MAX) NULL,
+    DeviceID UNIQUEIDENTIFIER NULL,
+    IPAddress NVARCHAR(64) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    FOREIGN KEY (DeviceID) REFERENCES dbo.Devices(DeviceID)
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AuditLogs_CreatedAt' AND object_id = OBJECT_ID('dbo.AuditLogs'))
+  BEGIN
+    CREATE INDEX IX_AuditLogs_CreatedAt ON dbo.AuditLogs(CreatedAt DESC)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AuditLogs_ActionTable' AND object_id = OBJECT_ID('dbo.AuditLogs'))
+  BEGIN
+    CREATE INDEX IX_AuditLogs_ActionTable ON dbo.AuditLogs(Action, TableName)
+  END
+END`,
+
     // View (split DROP and CREATE so CREATE is first in its batch)
     `IF OBJECT_ID('dbo.vw_AttendanceStatus','V') IS NOT NULL DROP VIEW dbo.vw_AttendanceStatus;`,
     `CREATE VIEW dbo.vw_AttendanceStatus AS
@@ -294,6 +417,10 @@ END`,
       `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Employees') AND name = 'Department')
 BEGIN
   ALTER TABLE dbo.Employees ADD Department NVARCHAR(100) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.FaceProfiles') AND name = 'EmbeddingText')
+BEGIN
+  ALTER TABLE dbo.FaceProfiles ADD EmbeddingText NVARCHAR(MAX) NULL
 END`
     ]
     for (const m of migrationStatements) {
@@ -972,133 +1099,584 @@ app.post('/shift-assignments/bulk', async (req, res) => {
   }
 })
 
+function getNextAttendanceLogType(att) {
+  if (!att || !att.MorningTimeIn) return 'MORNING_IN'
+  if (!att.MorningTimeOut) return 'MORNING_OUT'
+  if (!att.AfternoonTimeIn) return 'AFTERNOON_IN'
+  if (!att.AfternoonTimeOut) return 'AFTERNOON_OUT'
+  return null
+}
+
+async function processAttendanceLog(pool, { employeeID, logType, now = new Date() }) {
+  const todayStr = now.toISOString().split('T')[0]
+  const currentTime = now.toTimeString().split(' ')[0]
+  const todayDay = now.getDay() === 0 ? 7 : now.getDay()
+
+  const shiftResult = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeID)
+    .input('Today', sql.Date, todayStr)
+    .input('TodayDay', sql.Int, todayDay)
+    .query(`
+      SELECT s.*
+      FROM dbo.EmployeeShiftAllotments a
+      JOIN dbo.ShiftDefinitions s ON a.ShiftID = s.ShiftID
+      JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID
+      WHERE a.EmployeeID=@EmployeeID
+      AND @Today BETWEEN a.EffectiveFrom AND ISNULL(a.EffectiveTo, @Today)
+      AND sd.DayOfWeek=@TodayDay
+    `)
+  if (!shiftResult.recordset.length) {
+    const err = new Error('No shift assigned')
+    err.statusCode = 400
+    throw err
+  }
+  const shift = shiftResult.recordset[0]
+
+  await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeID)
+    .input('AttendanceDate', sql.Date, todayStr)
+    .query(`
+      IF NOT EXISTS (
+        SELECT 1 FROM dbo.AttendanceRecords
+        WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate
+      )
+      INSERT INTO dbo.AttendanceRecords(EmployeeID, AttendanceDate)
+      VALUES(@EmployeeID, @AttendanceDate)
+    `)
+
+  let minutesLate = 0
+  let minutesEarly = 0
+  let status = 'On-Time'
+
+  if (logType === 'MORNING_IN') {
+    const diff = await pool.request()
+      .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
+      .input('Required', sql.NVarChar(8), toTimeLiteral(shift.MorningTimeIn))
+      .query(`SELECT DATEDIFF(MINUTE, CAST(@Required AS TIME(7)), CAST(@Actual AS TIME(7))) AS diff`)
+    minutesLate = Math.max(0, diff.recordset[0].diff - (shift.GracePeriodMinutes || 0))
+    if (minutesLate > 0) status = 'Late'
+  }
+
+  if (logType === 'AFTERNOON_OUT') {
+    const diff = await pool.request()
+      .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
+      .input('Required', sql.NVarChar(8), toTimeLiteral(shift.AfternoonTimeOut))
+      .query(`SELECT DATEDIFF(MINUTE, CAST(@Actual AS TIME(7)), CAST(@Required AS TIME(7))) AS diff`)
+    minutesEarly = Math.max(0, diff.recordset[0].diff)
+    if (minutesEarly > 0) status = 'Early Leave'
+  }
+
+  const columnMap = {
+    MORNING_IN: 'MorningTimeIn',
+    MORNING_OUT: 'MorningTimeOut',
+    AFTERNOON_IN: 'AfternoonTimeIn',
+    AFTERNOON_OUT: 'AfternoonTimeOut'
+  }
+  const column = columnMap[logType]
+  if (!column) {
+    const err = new Error('Invalid logType')
+    err.statusCode = 400
+    throw err
+  }
+
+  await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeID)
+    .input('AttendanceDate', sql.Date, todayStr)
+    .input('TimeValue', sql.NVarChar(8), parseTimeString(currentTime))
+    .input('MinutesLate', sql.Int, minutesLate)
+    .input('MinutesEarly', sql.Int, minutesEarly)
+    .input('Status', sql.NVarChar(50), status)
+    .query(`
+      UPDATE dbo.AttendanceRecords
+      SET ${column}=CAST(@TimeValue AS TIME(7)),
+          MinutesLate = MinutesLate + @MinutesLate,
+          MinutesEarlyLeave = MinutesEarlyLeave + @MinutesEarly,
+          Status=@Status
+      WHERE EmployeeID=@EmployeeID
+      AND AttendanceDate=@AttendanceDate
+    `)
+
+  return { logType, time: currentTime, minutesLate, minutesEarly, status, attendanceDate: todayStr }
+}
+
 app.post('/attendance/log', async (req, res) => {
   const { employeeCode, logType } = req.body
 
   try {
     const pool = await getPool()
-
-    const today = new Date()
-    const todayStr = today.toISOString().split('T')[0]
-    const currentTime = today.toTimeString().split(' ')[0]
-    const todayDay = today.getDay() === 0 ? 7 : today.getDay() // Monday=1 ... Sunday=7
-
-    // 1️⃣ Get employee
     const empResult = await pool.request()
       .input('EmployeeCode', sql.NVarChar(50), employeeCode)
       .query(`SELECT EmployeeID FROM dbo.Employees WHERE EmployeeCode=@EmployeeCode`)
 
-    if (!empResult.recordset.length)
-      return res.status(404).json({ error: 'Employee not found' })
-
+    if (!empResult.recordset.length) return res.status(404).json({ error: 'Employee not found' })
     const employeeID = empResult.recordset[0].EmployeeID
+    const result = await processAttendanceLog(pool, { employeeID, logType })
 
-    // 2️⃣ Get active shift
-    const shiftResult = await pool.request()
-      .input('EmployeeID', sql.NVarChar(36), employeeID)
-      .input('Today', sql.Date, todayStr)
-      .input('TodayDay', sql.Int, todayDay)
+    await writeAuditLog(pool, {
+      actor: employeeCode || 'SYSTEM',
+      action: 'ATTENDANCE_LOG',
+      tableName: 'AttendanceRecords',
+      recordID: `${employeeID}:${result.attendanceDate}`,
+      afterJson: JSON.stringify(result),
+      ipAddress: req.ip
+    })
+
+    res.json({ success: true, ...result })
+  } catch (err) {
+    console.error(err)
+    res.status(err.statusCode || 500).json({ error: err.message })
+  }
+})
+
+app.post('/face-scan/recognize', async (req, res) => {
+  const { employeeCode, deviceCode, matchScore, rawImageRef, latitude, longitude, actor } = req.body || {}
+  if (!employeeCode) return res.status(400).json({ error: 'employeeCode is required (prototype mode)' })
+
+  try {
+    const pool = await getPool()
+    const { randomUUID } = require('crypto')
+
+    const emp = await pool.request()
+      .input('EmployeeCode', sql.NVarChar(50), employeeCode)
       .query(`
-        SELECT s.*
-        FROM dbo.EmployeeShiftAllotments a
-        JOIN dbo.ShiftDefinitions s ON a.ShiftID = s.ShiftID
-        JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID
-        WHERE a.EmployeeID=@EmployeeID
-        AND @Today BETWEEN a.EffectiveFrom AND ISNULL(a.EffectiveTo, @Today)
-        AND sd.DayOfWeek=@TodayDay
+        SELECT EmployeeID, EmployeeCode, CONCAT(FirstName,' ',LastName) AS EmployeeName
+        FROM dbo.Employees
+        WHERE EmployeeCode=@EmployeeCode
       `)
+    if (!emp.recordset.length) return res.status(404).json({ error: 'Employee not found' })
+    const employee = emp.recordset[0]
 
-    if (!shiftResult.recordset.length)
-      return res.status(400).json({ error: 'No shift assigned' })
+    let deviceID = null
+    if (deviceCode) {
+      const dev = await pool.request()
+        .input('DeviceCode', sql.NVarChar(100), deviceCode)
+        .query('SELECT DeviceID FROM dbo.Devices WHERE DeviceCode=@DeviceCode')
+      deviceID = dev.recordset[0]?.DeviceID || null
+    }
 
-    const shift = shiftResult.recordset[0]
-
-    // 3️⃣ Ensure attendance row exists
-    await pool.request()
-      .input('EmployeeID', sql.NVarChar(36), employeeID)
+    const todayStr = new Date().toISOString().split('T')[0]
+    const att = await pool.request()
+      .input('EmployeeID', sql.NVarChar(36), employee.EmployeeID)
       .input('AttendanceDate', sql.Date, todayStr)
       .query(`
-        IF NOT EXISTS (
-          SELECT 1 FROM dbo.AttendanceRecords
-          WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate
-        )
-        INSERT INTO dbo.AttendanceRecords(EmployeeID, AttendanceDate)
-        VALUES(@EmployeeID, @AttendanceDate)
+        SELECT MorningTimeIn, MorningTimeOut, AfternoonTimeIn, AfternoonTimeOut
+        FROM dbo.AttendanceRecords
+        WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate
       `)
 
-    // 4️⃣ Determine late / early
-    let minutesLate = 0
-    let minutesEarly = 0
-    let status = 'On-Time'
+    const nextLogType = getNextAttendanceLogType(att.recordset[0] || null)
+    if (!nextLogType) return res.status(409).json({ error: 'Attendance already complete for today' })
 
-    if (logType === 'MORNING_IN') {
-      const diff = await pool.request()
-        .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
-        .input('Required', sql.NVarChar(8), toTimeLiteral(shift.MorningTimeIn))
-        .query(`SELECT DATEDIFF(MINUTE, CAST(@Required AS TIME(7)), CAST(@Actual AS TIME(7))) AS diff`)
-      
-      minutesLate = Math.max(0, diff.recordset[0].diff - shift.GracePeriodMinutes)
-      if (minutesLate > 0) status = 'Late'
-    }
+    const attendanceResult = await processAttendanceLog(pool, {
+      employeeID: employee.EmployeeID,
+      logType: nextLogType
+    })
 
-    if (logType === 'AFTERNOON_OUT') {
-      const diff = await pool.request()
-        .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
-        .input('Required', sql.NVarChar(8), toTimeLiteral(shift.AfternoonTimeOut))
-        .query(`SELECT DATEDIFF(MINUTE, CAST(@Actual AS TIME(7)), CAST(@Required AS TIME(7))) AS diff`)
-      
-      minutesEarly = Math.max(0, diff.recordset[0].diff)
-      if (minutesEarly > 0) status = 'Early Leave'
-    }
+    const scanReq = pool.request()
+    scanReq.input('BiometricScanID', sql.NVarChar(36), randomUUID())
+    scanReq.input('EmployeeID', sql.NVarChar(36), employee.EmployeeID)
+    scanReq.input('DeviceID', sql.NVarChar(36), deviceID)
+    scanReq.input('ScanType', sql.NVarChar(50), 'FACE')
+    scanReq.input('AuthenticationMethod', sql.NVarChar(50), 'FACE_MATCH')
+    scanReq.input('MatchScore', sql.Decimal(5, 2), matchScore ?? 99.0)
+    scanReq.input('ScanResult', sql.NVarChar(30), 'SUCCESS')
+    scanReq.input('IsSuccessful', sql.Bit, true)
+    scanReq.input('RawImageRef', sql.NVarChar(500), rawImageRef || null)
+    scanReq.input('Latitude', sql.Decimal(10, 7), latitude ?? null)
+    scanReq.input('Longitude', sql.Decimal(10, 7), longitude ?? null)
+    const insertedScan = await scanReq.query(`
+      INSERT INTO dbo.BiometricScans
+      (BiometricScanID, EmployeeID, DeviceID, ScanType, AuthenticationMethod, MatchScore, ScanResult, IsSuccessful, RawImageRef, Latitude, Longitude)
+      OUTPUT INSERTED.BiometricScanID
+      VALUES
+      (@BiometricScanID, @EmployeeID, @DeviceID, @ScanType, @AuthenticationMethod, @MatchScore, @ScanResult, @IsSuccessful, @RawImageRef, @Latitude, @Longitude)
+    `)
 
-    // 5️⃣ Update attendance record
-    const columnMap = {
-      MORNING_IN: 'MorningTimeIn',
-      MORNING_OUT: 'MorningTimeOut',
-      AFTERNOON_IN: 'AfternoonTimeIn',
-      AFTERNOON_OUT: 'AfternoonTimeOut'
-    }
-
-    const column = columnMap[logType]
-
-    await pool.request()
-      .input('EmployeeID', sql.NVarChar(36), employeeID)
-      .input('AttendanceDate', sql.Date, todayStr)
-      .input('TimeValue', sql.NVarChar(8), parseTimeString(currentTime))
-      .input('MinutesLate', sql.Int, minutesLate)
-      .input('MinutesEarly', sql.Int, minutesEarly)
-      .input('Status', sql.NVarChar(50), status)
-      .query(`
-        UPDATE dbo.AttendanceRecords
-        SET ${column}=CAST(@TimeValue AS TIME(7)),
-            MinutesLate = MinutesLate + @MinutesLate,
-            MinutesEarlyLeave = MinutesEarlyLeave + @MinutesEarly,
-            Status=@Status
-        WHERE EmployeeID=@EmployeeID
-        AND AttendanceDate=@AttendanceDate
-      `)
+    await writeAuditLog(pool, {
+      actor: actor || deviceCode || 'FACE_SCANNER',
+      action: 'FACE_SCAN_ATTENDANCE',
+      tableName: 'AttendanceRecords',
+      recordID: `${employee.EmployeeID}:${attendanceResult.attendanceDate}`,
+      afterJson: JSON.stringify({ ...attendanceResult, biometricScanID: insertedScan.recordset[0]?.BiometricScanID }),
+      deviceID,
+      ipAddress: req.ip
+    })
 
     res.json({
       success: true,
-      logType,
-      time: currentTime,
-      minutesLate,
-      minutesEarly,
-      status
+      employeeCode: employee.EmployeeCode,
+      employeeName: employee.EmployeeName,
+      deviceCode: deviceCode || null,
+      biometricScanID: insertedScan.recordset[0]?.BiometricScanID || null,
+      ...attendanceResult
     })
+  } catch (err) {
+    console.error(err)
+    res.status(err.statusCode || 500).json({ error: err.message })
+  }
+})
 
+// Device registry (for kiosk/mobile scanner clients)
+app.get('/devices', async (req, res) => {
+  try {
+    const pool = await getPool()
+    const q = `SELECT DeviceID, DeviceCode, DeviceName, DeviceType, SerialNumber, LocationName, Latitude, Longitude, IsActive, RegisteredAt, RegisteredBy, LastSeenAt, UpdatedAt
+      FROM dbo.Devices
+      ORDER BY RegisteredAt DESC`
+    const result = await pool.request().query(q)
+    res.json(result.recordset)
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: err.message })
   }
 })
 
+app.post('/devices', async (req, res) => {
+  const {
+    DeviceCode,
+    DeviceName,
+    DeviceType,
+    SerialNumber,
+    LocationName,
+    Latitude,
+    Longitude,
+    IsActive,
+    RegisteredBy
+  } = req.body || {}
 
-// Compatibility stubs for other old endpoints to avoid 500s
-app.get('/biometric-scans', async (req, res) => res.json([]))
-app.post('/biometric-scans', async (req, res) => res.status(501).json({ error: 'Biometric scans are not implemented in new schema' }))
-app.get('/audit-logs', async (req, res) => res.json([]))
-app.post('/audit-logs', async (req, res) => res.status(501).json({ error: 'Audit logs are not implemented in new schema' }))
+  if (!DeviceCode || !DeviceName) {
+    return res.status(400).json({ error: 'DeviceCode and DeviceName are required' })
+  }
+
+  try {
+    const pool = await getPool()
+    const { randomUUID } = require('crypto')
+    const request = pool.request()
+    request.input('DeviceID', sql.NVarChar(36), randomUUID())
+    request.input('DeviceCode', sql.NVarChar(100), String(DeviceCode).trim())
+    request.input('DeviceName', sql.NVarChar(150), String(DeviceName).trim())
+    request.input('DeviceType', sql.NVarChar(50), DeviceType || null)
+    request.input('SerialNumber', sql.NVarChar(100), SerialNumber || null)
+    request.input('LocationName', sql.NVarChar(150), LocationName || null)
+    request.input('Latitude', sql.Decimal(10, 7), Latitude ?? null)
+    request.input('Longitude', sql.Decimal(10, 7), Longitude ?? null)
+    request.input('IsActive', sql.Bit, IsActive === undefined ? true : !!IsActive)
+    request.input('RegisteredBy', sql.NVarChar(100), RegisteredBy || null)
+    const q = `
+      INSERT INTO dbo.Devices (DeviceID, DeviceCode, DeviceName, DeviceType, SerialNumber, LocationName, Latitude, Longitude, IsActive, RegisteredBy)
+      OUTPUT INSERTED.*
+      VALUES (@DeviceID, @DeviceCode, @DeviceName, @DeviceType, @SerialNumber, @LocationName, @Latitude, @Longitude, @IsActive, @RegisteredBy)
+    `
+    const result = await request.query(q)
+    const created = result.recordset[0]
+    await writeAuditLog(pool, {
+      actor: RegisteredBy || 'SYSTEM',
+      action: 'CREATE_DEVICE',
+      tableName: 'Devices',
+      recordID: created.DeviceID,
+      afterJson: JSON.stringify(created),
+      ipAddress: req.ip
+    })
+    res.json(created)
+  } catch (err) {
+    if (String(err.message || '').includes('UNIQUE')) {
+      return res.status(409).json({ error: 'DeviceCode already exists' })
+    }
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+
+app.post('/devices/register-connection', async (req, res) => {
+  const {
+    DeviceCode,
+    DeviceName,
+    DeviceType,
+    SerialNumber,
+    LocationName,
+    Latitude,
+    Longitude,
+    RegisteredBy
+  } = req.body || {}
+
+  const normalizedCode = String(DeviceCode || '').trim()
+  if (!normalizedCode) {
+    return res.status(400).json({ error: 'DeviceCode is required' })
+  }
+
+  try {
+    const pool = await getPool()
+    const { randomUUID } = require('crypto')
+
+    const existingResult = await pool.request()
+      .input('DeviceCode', sql.NVarChar(100), normalizedCode)
+      .query('SELECT TOP 1 * FROM dbo.Devices WHERE DeviceCode=@DeviceCode')
+
+    let device = null
+    let status = 'connected'
+
+    if (existingResult.recordset.length) {
+      const reqUpdate = pool.request()
+      reqUpdate.input('DeviceCode', sql.NVarChar(100), normalizedCode)
+      reqUpdate.input('DeviceName', sql.NVarChar(150), DeviceName ? String(DeviceName).trim() : null)
+      reqUpdate.input('DeviceType', sql.NVarChar(50), DeviceType || null)
+      reqUpdate.input('SerialNumber', sql.NVarChar(100), SerialNumber || null)
+      reqUpdate.input('LocationName', sql.NVarChar(150), LocationName || null)
+      reqUpdate.input('Latitude', sql.Decimal(10, 7), Latitude ?? null)
+      reqUpdate.input('Longitude', sql.Decimal(10, 7), Longitude ?? null)
+      const updated = await reqUpdate.query(`
+        UPDATE dbo.Devices
+        SET
+          DeviceName = COALESCE(@DeviceName, DeviceName),
+          DeviceType = COALESCE(@DeviceType, DeviceType),
+          SerialNumber = COALESCE(@SerialNumber, SerialNumber),
+          LocationName = COALESCE(@LocationName, LocationName),
+          Latitude = COALESCE(@Latitude, Latitude),
+          Longitude = COALESCE(@Longitude, Longitude),
+          IsActive = 1,
+          LastSeenAt = GETDATE(),
+          UpdatedAt = GETDATE()
+        OUTPUT INSERTED.*
+        WHERE DeviceCode=@DeviceCode
+      `)
+      device = updated.recordset[0]
+    } else {
+      return res.status(404).json({
+        error: 'Device not found. Add the device first via POST /devices.'
+      })
+    }
+
+    const connectionID = randomUUID()
+
+    await writeAuditLog(pool, {
+      actor: RegisteredBy || normalizedCode,
+      action: 'REGISTER_DEVICE_CONNECTION',
+      tableName: 'Devices',
+      recordID: device?.DeviceID || null,
+      afterJson: JSON.stringify(device || {}),
+      deviceID: device?.DeviceID || null,
+      ipAddress: req.ip
+    })
+
+    return res.json({
+      success: true,
+      status,
+      connectionID,
+      serverTime: new Date().toISOString(),
+      device
+    })
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/devices/heartbeat', async (req, res) => {
+  const { DeviceCode, DeviceID, Actor } = req.body || {}
+  const normalizedCode = String(DeviceCode || '').trim()
+
+  if (!normalizedCode && !DeviceID) {
+    return res.status(400).json({ error: 'DeviceCode or DeviceID is required' })
+  }
+
+  try {
+    const pool = await getPool()
+    const request = pool.request()
+    request.input('DeviceCode', sql.NVarChar(100), normalizedCode || null)
+    request.input('DeviceID', sql.NVarChar(36), DeviceID || null)
+
+    const q = `
+      UPDATE dbo.Devices
+      SET IsActive = 1, LastSeenAt = GETDATE(), UpdatedAt = GETDATE()
+      OUTPUT INSERTED.*
+      WHERE (@DeviceID IS NOT NULL AND DeviceID=@DeviceID)
+         OR (@DeviceID IS NULL AND @DeviceCode IS NOT NULL AND DeviceCode=@DeviceCode)
+    `
+    const updated = await request.query(q)
+    const device = updated.recordset[0]
+    if (!device) {
+      return res.status(404).json({ error: 'Device not found' })
+    }
+
+    await writeAuditLog(pool, {
+      actor: Actor || normalizedCode || 'DEVICE_CLIENT',
+      action: 'DEVICE_HEARTBEAT',
+      tableName: 'Devices',
+      recordID: device.DeviceID,
+      afterJson: JSON.stringify({ LastSeenAt: device.LastSeenAt }),
+      deviceID: device.DeviceID,
+      ipAddress: req.ip
+    })
+
+    return res.json({ success: true, serverTime: new Date().toISOString(), device })
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: err.message })
+  }
+})
+// Biometric scans
+app.get('/biometric-scans', async (req, res) => {
+  try {
+    const pool = await getPool()
+    const q = `SELECT
+      bs.BiometricScanID,
+      bs.EmployeeID,
+      e.EmployeeCode,
+      CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
+      bs.DeviceID,
+      d.DeviceCode,
+      d.DeviceName,
+      bs.ScanTime,
+      bs.ScanType,
+      bs.AuthenticationMethod,
+      bs.MatchScore,
+      bs.ScanResult,
+      bs.IsSuccessful,
+      bs.FailureReason,
+      bs.RawImageRef,
+      bs.LivenessScore,
+      bs.Latitude,
+      bs.Longitude
+      FROM dbo.BiometricScans bs
+      LEFT JOIN dbo.Employees e ON e.EmployeeID = bs.EmployeeID
+      LEFT JOIN dbo.Devices d ON d.DeviceID = bs.DeviceID
+      ORDER BY bs.ScanTime DESC`
+    const result = await pool.request().query(q)
+    res.json(result.recordset)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/biometric-scans', async (req, res) => {
+  const {
+    EmployeeID,
+    EmployeeCode,
+    DeviceID,
+    DeviceCode,
+    ScanType,
+    AuthenticationMethod,
+    MatchScore,
+    ScanResult,
+    IsSuccessful,
+    FailureReason,
+    RawImageRef,
+    LivenessScore,
+    Latitude,
+    Longitude,
+    Actor
+  } = req.body || {}
+
+  try {
+    const pool = await getPool()
+    const { randomUUID } = require('crypto')
+
+    let resolvedEmployeeID = EmployeeID || null
+    if (!resolvedEmployeeID && EmployeeCode) {
+      const emp = await pool.request()
+        .input('EmployeeCode', sql.NVarChar(50), EmployeeCode)
+        .query('SELECT EmployeeID FROM dbo.Employees WHERE EmployeeCode=@EmployeeCode')
+      resolvedEmployeeID = emp.recordset[0]?.EmployeeID || null
+    }
+
+    let resolvedDeviceID = DeviceID || null
+    if (!resolvedDeviceID && DeviceCode) {
+      const dev = await pool.request()
+        .input('DeviceCode', sql.NVarChar(100), DeviceCode)
+        .query('SELECT DeviceID FROM dbo.Devices WHERE DeviceCode=@DeviceCode')
+      resolvedDeviceID = dev.recordset[0]?.DeviceID || null
+    }
+
+    const reqInsert = pool.request()
+    reqInsert.input('BiometricScanID', sql.NVarChar(36), randomUUID())
+    reqInsert.input('EmployeeID', sql.NVarChar(36), resolvedEmployeeID)
+    reqInsert.input('DeviceID', sql.NVarChar(36), resolvedDeviceID)
+    reqInsert.input('ScanType', sql.NVarChar(50), ScanType || 'FACE')
+    reqInsert.input('AuthenticationMethod', sql.NVarChar(50), AuthenticationMethod || 'FACE_MATCH')
+    reqInsert.input('MatchScore', sql.Decimal(5, 2), MatchScore ?? null)
+    reqInsert.input('ScanResult', sql.NVarChar(30), ScanResult || ((IsSuccessful === false || FailureReason) ? 'FAILED' : 'SUCCESS'))
+    reqInsert.input('IsSuccessful', sql.Bit, IsSuccessful === undefined ? !(FailureReason) : !!IsSuccessful)
+    reqInsert.input('FailureReason', sql.NVarChar(255), FailureReason || null)
+    reqInsert.input('RawImageRef', sql.NVarChar(500), RawImageRef || null)
+    reqInsert.input('LivenessScore', sql.Decimal(5, 2), LivenessScore ?? null)
+    reqInsert.input('Latitude', sql.Decimal(10, 7), Latitude ?? null)
+    reqInsert.input('Longitude', sql.Decimal(10, 7), Longitude ?? null)
+    const q = `
+      INSERT INTO dbo.BiometricScans
+      (BiometricScanID, EmployeeID, DeviceID, ScanType, AuthenticationMethod, MatchScore, ScanResult, IsSuccessful, FailureReason, RawImageRef, LivenessScore, Latitude, Longitude)
+      OUTPUT INSERTED.*
+      VALUES
+      (@BiometricScanID, @EmployeeID, @DeviceID, @ScanType, @AuthenticationMethod, @MatchScore, @ScanResult, @IsSuccessful, @FailureReason, @RawImageRef, @LivenessScore, @Latitude, @Longitude)
+    `
+    const inserted = await reqInsert.query(q)
+    const created = inserted.recordset[0]
+
+    await writeAuditLog(pool, {
+      actor: Actor || 'SCANNER',
+      action: 'BIOMETRIC_SCAN',
+      tableName: 'BiometricScans',
+      recordID: created.BiometricScanID,
+      afterJson: JSON.stringify(created),
+      deviceID: resolvedDeviceID,
+      ipAddress: req.ip
+    })
+
+    res.json(created)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Audit logs
+app.get('/audit-logs', async (req, res) => {
+  try {
+    const pool = await getPool()
+    const q = `SELECT AuditLogID, Actor, Action, TableName, RecordID, BeforeJson, AfterJson, DeviceID, IPAddress, CreatedAt
+      FROM dbo.AuditLogs
+      ORDER BY CreatedAt DESC`
+    const result = await pool.request().query(q)
+    res.json(result.recordset)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/audit-logs', async (req, res) => {
+  const { Actor, Action, TableName, RecordID, BeforeJson, AfterJson, DeviceID, IPAddress } = req.body || {}
+  if (!Action || !TableName) {
+    return res.status(400).json({ error: 'Action and TableName are required' })
+  }
+  try {
+    const pool = await getPool()
+    const { randomUUID } = require('crypto')
+    const insert = await pool.request()
+      .input('AuditLogID', sql.NVarChar(36), randomUUID())
+      .input('Actor', sql.NVarChar(100), Actor || null)
+      .input('Action', sql.NVarChar(100), Action)
+      .input('TableName', sql.NVarChar(128), TableName)
+      .input('RecordID', sql.NVarChar(100), RecordID || null)
+      .input('BeforeJson', sql.NVarChar(sql.MAX), BeforeJson || null)
+      .input('AfterJson', sql.NVarChar(sql.MAX), AfterJson || null)
+      .input('DeviceID', sql.NVarChar(36), DeviceID || null)
+      .input('IPAddress', sql.NVarChar(64), IPAddress || req.ip || null)
+      .query(`
+        INSERT INTO dbo.AuditLogs
+        (AuditLogID, Actor, Action, TableName, RecordID, BeforeJson, AfterJson, DeviceID, IPAddress)
+        OUTPUT INSERTED.*
+        VALUES
+        (@AuditLogID, @Actor, @Action, @TableName, @RecordID, @BeforeJson, @AfterJson, @DeviceID, @IPAddress)
+      `)
+    res.json(insert.recordset[0])
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.get('/special-days', async (req, res) => res.json([]))
 app.post('/special-days', async (req, res) => res.status(501).json({ error: 'Special days are not implemented in new schema' }))
 
@@ -1106,13 +1684,248 @@ app.post('/special-days', async (req, res) => res.status(501).json({ error: 'Spe
 app.get('/attendance/today', async (req, res) => {
   try {
     const pool = await getPool()
-    const today = new Date().toISOString().split('T')[0]
-    const q = `SELECT a.AttendanceID, a.EmployeeID, e.EmployeeCode, CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName, a.AttendanceDate, a.MorningTimeIn, a.MorningTimeOut, a.AfternoonTimeIn, a.AfternoonTimeOut, a.Status
+    const now = new Date()
+    const today = now.toISOString().split('T')[0]
+    const todayDay = now.getDay() === 0 ? 7 : now.getDay()
+    const q = `SELECT
+      a.AttendanceID,
+      a.EmployeeID,
+      e.EmployeeCode,
+      CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
+      CONVERT(varchar(10), a.AttendanceDate, 23) AS AttendanceDate,
+      CONVERT(varchar(5), a.MorningTimeIn, 108) AS MorningTimeIn,
+      CONVERT(varchar(5), a.MorningTimeOut, 108) AS MorningTimeOut,
+      CONVERT(varchar(5), a.AfternoonTimeIn, 108) AS AfternoonTimeIn,
+      CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+      sched.ShiftName,
+      ISNULL(sched.GracePeriodMinutes, 0) AS GracePeriodMinutes,
+      CONVERT(varchar(5), sched.ReqMorningIn, 108) AS RequiredMorningIn,
+      CONVERT(varchar(5), sched.ReqMorningOut, 108) AS RequiredMorningOut,
+      CONVERT(varchar(5), sched.ReqAfternoonIn, 108) AS RequiredAfternoonIn,
+      CONVERT(varchar(5), sched.ReqAfternoonOut, 108) AS RequiredAfternoonOut,
+      CASE
+        WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
+        WHEN a.MorningTimeIn IS NULL THEN 'Absent'
+        WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
+        WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
+        ELSE 'On-Time'
+      END AS MorningInStatus,
+      CASE
+        WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
+        WHEN a.MorningTimeOut IS NULL THEN 'Missing'
+        WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
+        WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
+        ELSE 'On-Time'
+      END AS MorningOutStatus,
+      CASE
+        WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
+        WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
+        WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
+        WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+        ELSE 'On-Time'
+      END AS AfternoonInStatus,
+      CASE
+        WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
+        WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
+        WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
+        WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
+        ELSE 'On-Time'
+      END AS AfternoonOutStatus,
+      CASE
+        WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
+        WHEN
+          (CASE
+            WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
+            WHEN a.MorningTimeIn IS NULL THEN 'Absent'
+            WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
+            WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
+            ELSE 'On-Time'
+          END) = 'Late'
+          OR
+          (CASE
+            WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
+            WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
+            WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
+            WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+            ELSE 'On-Time'
+          END) = 'Late'
+        THEN 'Late'
+        WHEN
+          (CASE
+            WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
+            WHEN a.MorningTimeOut IS NULL THEN 'Missing'
+            WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
+            WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
+            ELSE 'On-Time'
+          END) = 'Early-Out'
+          OR
+          (CASE
+            WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
+            WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
+            WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
+            WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
+            ELSE 'On-Time'
+          END) = 'Early-Out'
+        THEN 'Early Leave'
+        ELSE ISNULL(a.Status, 'Present')
+      END AS AttendanceSummary
       FROM dbo.AttendanceRecords a
       JOIN dbo.Employees e ON a.EmployeeID = e.EmployeeID
+      OUTER APPLY (
+        SELECT TOP 1
+          s.ShiftName,
+          ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
+          ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
+          ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
+          ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
+          ISNULL(dss.GracePeriodMinutes, s.GracePeriodMinutes) AS GracePeriodMinutes
+        FROM dbo.EmployeeShiftAllotments sa
+        JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID
+        JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID AND sd.DayOfWeek = @todayDay
+        LEFT JOIN dbo.ShiftDaySchedules dss ON dss.ShiftID = s.ShiftID AND dss.DayOfWeek = @todayDay
+        WHERE sa.EmployeeID = a.EmployeeID
+          AND @today BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, @today)
+        ORDER BY sa.EffectiveFrom DESC
+      ) sched
       WHERE AttendanceDate = @today
       ORDER BY a.MorningTimeIn DESC`
-    const result = await pool.request().input('today', sql.Date, today).query(q)
+    const result = await pool.request()
+      .input('today', sql.Date, today)
+      .input('todayDay', sql.Int, todayDay)
+      .query(q)
+    res.json(result.recordset)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Attendance by date range (inclusive)
+app.post('/attendance/range', async (req, res) => {
+  const { from, to } = req.body || {}
+  if (!from || !to) {
+    return res.status(400).json({ error: 'from and to are required (YYYY-MM-DD)' })
+  }
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+  if (!dateRegex.test(from) || !dateRegex.test(to)) {
+    return res.status(400).json({ error: 'from and to must be YYYY-MM-DD' })
+  }
+  try {
+    const pool = await getPool()
+    const result = await pool.request()
+      .input('from', sql.Date, from)
+      .input('to', sql.Date, to)
+      .query(`
+        SET DATEFIRST 1;
+        SELECT
+          a.AttendanceID,
+          a.EmployeeID,
+          e.EmployeeCode,
+          CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
+          CONVERT(varchar(10), a.AttendanceDate, 23) AS AttendanceDate,
+          CONVERT(varchar(5), a.MorningTimeIn, 108) AS MorningTimeIn,
+          CONVERT(varchar(5), a.MorningTimeOut, 108) AS MorningTimeOut,
+          CONVERT(varchar(5), a.AfternoonTimeIn, 108) AS AfternoonTimeIn,
+          CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+          a.MinutesLate,
+          a.MinutesEarlyLeave,
+          a.Status,
+          sched.ShiftName,
+          CONVERT(varchar(5), sched.ReqMorningIn, 108) AS RequiredMorningIn,
+          CONVERT(varchar(5), sched.ReqMorningOut, 108) AS RequiredMorningOut,
+          CONVERT(varchar(5), sched.ReqAfternoonIn, 108) AS RequiredAfternoonIn,
+          CONVERT(varchar(5), sched.ReqAfternoonOut, 108) AS RequiredAfternoonOut,
+          ISNULL(sched.GracePeriodMinutes, 0) AS GracePeriodMinutes,
+          CASE
+            WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
+            WHEN a.MorningTimeIn IS NULL THEN 'Absent'
+            WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
+            WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
+            ELSE 'On-Time'
+          END AS MorningInStatus,
+          CASE
+            WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
+            WHEN a.MorningTimeOut IS NULL THEN 'Missing'
+            WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
+            WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
+            ELSE 'On-Time'
+          END AS MorningOutStatus,
+          CASE
+            WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
+            WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
+            WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
+            WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+            ELSE 'On-Time'
+          END AS AfternoonInStatus,
+          CASE
+            WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
+            WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
+            WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
+            WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
+            ELSE 'On-Time'
+          END AS AfternoonOutStatus,
+          CASE
+            WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
+            WHEN
+              (CASE
+                WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
+                WHEN a.MorningTimeIn IS NULL THEN 'Absent'
+                WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
+                WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
+                ELSE 'On-Time'
+              END) = 'Late'
+              OR
+              (CASE
+                WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
+                WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
+                WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
+                WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+                ELSE 'On-Time'
+              END) = 'Late'
+            THEN 'Late'
+            WHEN
+              (CASE
+                WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
+                WHEN a.MorningTimeOut IS NULL THEN 'Missing'
+                WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
+                WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
+                ELSE 'On-Time'
+              END) = 'Early-Out'
+              OR
+              (CASE
+                WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
+                WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
+                WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
+                WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
+                ELSE 'On-Time'
+              END) = 'Early-Out'
+            THEN 'Early Leave'
+            ELSE ISNULL(a.Status, 'Present')
+          END AS AttendanceSummary
+        FROM dbo.AttendanceRecords a
+        JOIN dbo.Employees e ON a.EmployeeID = e.EmployeeID
+        CROSS APPLY (
+          SELECT CASE WHEN DATEPART(WEEKDAY, a.AttendanceDate) = 1 THEN 7 ELSE DATEPART(WEEKDAY, a.AttendanceDate) - 1 END AS DayNum
+        ) dayinfo
+        OUTER APPLY (
+          SELECT TOP 1
+            s.ShiftName,
+            ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
+            ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
+            ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
+            ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
+            ISNULL(dss.GracePeriodMinutes, s.GracePeriodMinutes) AS GracePeriodMinutes
+          FROM dbo.EmployeeShiftAllotments sa
+          JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID
+          JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID AND sd.DayOfWeek = dayinfo.DayNum
+          LEFT JOIN dbo.ShiftDaySchedules dss ON dss.ShiftID = s.ShiftID AND dss.DayOfWeek = dayinfo.DayNum
+          WHERE sa.EmployeeID = a.EmployeeID
+            AND a.AttendanceDate BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, a.AttendanceDate)
+          ORDER BY sa.EffectiveFrom DESC
+        ) sched
+        WHERE a.AttendanceDate BETWEEN @from AND @to
+        ORDER BY a.AttendanceDate DESC, a.MorningTimeIn DESC
+      `)
     res.json(result.recordset)
   } catch (err) {
     console.error(err)
@@ -1211,12 +2024,6 @@ app.delete('/employees/:id', async (req, res) => {
   }
 })
 
-// Old Users and SchedulePeriods endpoints removed - tables no longer exist in FlexiAttendanceSystem schema
-
-// Old ScheduleDetails endpoints removed - table no longer exists in FlexiAttendanceSystem schema
-
-// Old endpoint sections removed - tables no longer exist in FlexiAttendanceSystem schema
-
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`)
 })
@@ -1225,3 +2032,8 @@ process.on('SIGINT', async () => {
   try { await sql.close() } catch (e) {}
   process.exit(0)
 })
+
+
+
+
+
