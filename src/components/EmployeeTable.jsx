@@ -29,28 +29,33 @@ import * as api from '../api/employees'
 
 function EmployeeRow({ e, onEdit, onDelete }) {
   return (
-    <TableRow hover>
-      <TableCell>
+    <TableRow
+      hover
+      sx={{
+        '&:hover': { background: 'rgba(255,255,255,0.04)' }
+      }}
+    >
+      <TableCell sx={{ color: 'var(--text)' }}>
         <Stack direction="row" spacing={2} alignItems="center">
-          <Avatar>{e.name.split(' ').map(n => n[0]).slice(0,2).join('')}</Avatar>
+          <Avatar sx={{ bgcolor: 'var(--primary)' }}>{e.name.split(' ').map(n => n[0]).slice(0,2).join('')}</Avatar>
           <Box>
-            <div style={{ fontWeight: 600 }}>{e.name}</div>
-            <div style={{ fontSize: 12, color: '#666' }}>{e.email}</div>
+            <div style={{ fontWeight: 600, color: 'var(--text)' }}>{e.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{e.email}</div>
           </Box>
         </Stack>
       </TableCell>
-      <TableCell>{e.position}</TableCell>
-      <TableCell>{e.department}</TableCell>
-      <TableCell>{e.assignedShift || 'N/A'}</TableCell>
-      <TableCell>{e.phone}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.position}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.department}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.assignedShift || 'N/A'}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.phone}</TableCell>
       <TableCell align="right">
         <Tooltip title="Edit">
-          <IconButton size="small" onClick={() => onEdit(e)}>
+          <IconButton size="small" onClick={() => onEdit(e)} sx={{ color: 'var(--muted)' }}>
             <EditIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="Delete">
-          <IconButton size="small" onClick={() => onDelete && onDelete(e.id)}>
+          <IconButton size="small" onClick={() => onDelete && onDelete(e.id)} sx={{ color: 'var(--muted)' }}>
             <DeleteIcon fontSize="small" />
           </IconButton>
         </Tooltip>
@@ -146,15 +151,26 @@ export default function EmployeeTable() {
             placeholder="Search by name or position"
             value={query}
             onChange={(e) => { setQuery(e.target.value); setPage(0) }}
-            InputProps={{ startAdornment: <SearchIcon sx={{ mr: 1 }} /> }}
+            InputProps={{
+              startAdornment: <SearchIcon sx={{ mr: 1, color: 'var(--muted)' }} />,
+              sx: { color: 'var(--text)' }
+            }}
+            sx={{
+              background: 'var(--surface)',
+              borderRadius: 2,
+              '& fieldset': { borderColor: 'var(--border)' },
+              '&:hover fieldset': { borderColor: 'var(--primary)' }
+            }}
           />
           <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="dept-label">Department</InputLabel>
+            <InputLabel id="dept-label" sx={{ color: 'var(--text)' }}>Department</InputLabel>
             <Select
               labelId="dept-label"
               value={department}
               label="Department"
               onChange={(e) => { setDepartment(e.target.value); setPage(0) }}
+              sx={{ color: 'var(--text)' }}
+              MenuProps={{ PaperProps: { sx: { background: 'var(--surface)', color: 'var(--text)' } } }}
             >
               {departments.map(d => (
                 <MenuItem key={d} value={d}>{d}</MenuItem>
@@ -164,14 +180,17 @@ export default function EmployeeTable() {
         </Box>
 
         <Box>
-          <IconButton color="primary" onClick={openAdd}>
+          <IconButton onClick={openAdd} sx={{ color: 'var(--primary)', background: 'rgba(37,99,235,0.12)', '&:hover': { background: 'rgba(37,99,235,0.2)' } }}>
             <AddIcon />
           </IconButton>
         </Box>
       </Box>
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table>
+      <TableContainer component={Paper} variant="outlined" sx={{ background: 'var(--surface)', borderColor: 'var(--border)' }}>
+        <Table sx={{
+          '& th, & td': { color: 'var(--text)', borderColor: 'var(--border)' },
+          '& thead th': { background: 'var(--primary)', color: '#fff', fontWeight: 700 }
+        }}>
           <TableHead>
             <TableRow>
               <TableCell>Employee</TableCell>

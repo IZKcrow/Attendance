@@ -3,11 +3,12 @@ import React from 'react'
 import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper,
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button,
-  Box, TextField, CircularProgress, Alert
+  Box, TextField, CircularProgress, Alert, TablePagination, InputAdornment
 } from '@mui/material'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import AddIcon from '@mui/icons-material/Add'
+import SearchIcon from '@mui/icons-material/Search'
 
 export default function GenericDataTable({
   title,
@@ -30,6 +31,7 @@ export default function GenericDataTable({
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editing, setEditing] = React.useState(null)
   const [form, setForm] = React.useState({})
+  const [search, setSearch] = React.useState('')
 
   const handleOpenAdd = () => { setEditing(null); setForm({}); setDialogOpen(true) }
   const handleOpenEdit = (row) => { setEditing(row); setForm({ ...row }); setDialogOpen(true) }
@@ -51,13 +53,66 @@ export default function GenericDataTable({
     if (confirm('Delete this record?')) await onDelete(id)
   }
 
+  const [page, setPage] = React.useState(0)
+  const [rowsPerPage, setRowsPerPage] = React.useState(10)
+
+  const handleChangePage = (_evt, newPage) => setPage(newPage)
+  const handleChangeRowsPerPage = (evt) => {
+    setRowsPerPage(parseInt(evt.target.value, 10))
+    setPage(0)
+  }
+
+  const filtered = React.useMemo(() => {
+    if (!search.trim()) return data
+    const needle = search.toLowerCase()
+    return data.filter((row) =>
+      Object.values(row || {}).some((val) =>
+        (val === null || val === undefined) ? false : String(val).toLowerCase().includes(needle)
+      )
+    )
+  }, [data, search])
+
+  const displayed = loading ? [] : filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
+
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <h3>{title}</h3>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
+        <h3 style={{ margin: 0 }}>{title}</h3>
         {allowAdd && (
-          <Button startIcon={<AddIcon />} variant="contained" onClick={handleOpenAdd}>Add</Button>
+          <Button
+            startIcon={<AddIcon />}
+            variant="contained"
+            onClick={handleOpenAdd}
+            sx={{ background: 'var(--primary)', ':hover': { background: 'var(--primary-dark)' } }}
+          >
+            Add
+          </Button>
         )}
+      </Box>
+      <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
+        <TextField
+          size="small"
+          placeholder="Search..."
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setPage(0) }}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" sx={{ color: '#6b7280' }} />
+              </InputAdornment>
+            )
+          }}
+          sx={{
+            minWidth: 260,
+            maxWidth: 420,
+            background: 'var(--surface)',
+            borderRadius: 3,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+            '& fieldset': { borderColor: 'var(--border)' },
+            '&:hover fieldset': { borderColor: 'var(--primary)' },
+            '& .MuiOutlinedInput-input': { paddingY: 1.2 }
+          }}
+        />
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
@@ -67,6 +122,8 @@ export default function GenericDataTable({
         sx={{
           width: '100%',
           overflowX: 'auto',
+          background: 'var(--surface)',
+          color: 'var(--text)',
           '& th, & td': {
             whiteSpace: 'normal',
             wordBreak: 'break-word',
@@ -74,9 +131,19 @@ export default function GenericDataTable({
           }
         }}
       >
-        <Table sx={{ width: '100%' }}>
+        <Table
+          sx={{
+            width: '100%',
+            '& th, & td': { color: 'var(--text)', borderColor: 'var(--border)' },
+            '& thead th': {
+              background: 'var(--primary)',
+              color: '#fff',
+              fontWeight: 700
+            }
+          }}
+        >
           <TableHead>
-            <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+            <TableRow>
               {columns.map(col => <TableCell key={col}><strong>{col}</strong></TableCell>)}
               {showActions && <TableCell align="right" sx={{ minWidth: 110 }}><strong>Actions</strong></TableCell>}
             </TableRow>
@@ -84,12 +151,15 @@ export default function GenericDataTable({
           <TableBody>
             {loading && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center"><CircularProgress /></TableCell></TableRow>}
             {!loading && data.length === 0 && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center">No data</TableCell></TableRow>}
-            {!loading && data.map((row) => (
+            {!loading && displayed.map((row) => (
               <TableRow
                 key={row[primaryKeyField]}
                 hover
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
-                sx={onRowClick ? { cursor: 'pointer' } : undefined}
+                sx={{
+                  ...(onRowClick ? { cursor: 'pointer' } : {}),
+                  '&:hover': { background: 'rgba(255,255,255,0.03)' }
+                }}
               >
                 {renderRow(row)}
                 {showActions && (
@@ -111,6 +181,19 @@ export default function GenericDataTable({
           </TableBody>
         </Table>
       </TableContainer>
+
+      {!loading && filtered.length > 0 && (
+        <TablePagination
+          component="div"
+          count={filtered.length}
+          page={page}
+          onPageChange={handleChangePage}
+          rowsPerPage={rowsPerPage}
+          onRowsPerPageChange={handleChangeRowsPerPage}
+          rowsPerPageOptions={[5, 10, 20]}
+          labelRowsPerPage="Rows per page"
+        />
+      )}
 
       <Dialog open={dialogOpen} onClose={handleClose} maxWidth="sm" fullWidth>
         <DialogTitle>{editing ? 'Edit' : 'Add New'}</DialogTitle>

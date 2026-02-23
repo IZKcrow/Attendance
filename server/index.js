@@ -1199,6 +1199,111 @@ async function processAttendanceLog(pool, { employeeID, logType, now = new Date(
   return { logType, time: currentTime, minutesLate, minutesEarly, status, attendanceDate: todayStr }
 }
 
+// --- Attendance manual edit/update ---------------------------------
+async function updateAttendanceRecord(pool, id, body = {}) {
+  if (!id) {
+    const err = new Error('AttendanceID is required')
+    err.statusCode = 400
+    throw err
+  }
+
+  const setClauses = []
+  const req = pool.request()
+  req.input('AttendanceID', sql.NVarChar(36), id)
+
+  if (body.EmployeeID !== undefined) {
+    req.input('EmployeeID', sql.NVarChar(36), body.EmployeeID || null)
+    setClauses.push('EmployeeID = @EmployeeID')
+  }
+
+  if (body.AttendanceDate !== undefined) {
+    req.input('AttendanceDate', sql.Date, body.AttendanceDate || null)
+    setClauses.push('AttendanceDate = @AttendanceDate')
+  }
+
+  const timeField = (key, sqlName) => {
+    if (body[key] === undefined) return
+    const parsed = body[key] ? parseTimeString(body[key]) : null
+    if (body[key] && !parsed) {
+      const err = new Error(`Invalid time for ${key}`)
+      err.statusCode = 400
+      throw err
+    }
+    req.input(sqlName, sql.VarChar(8), parsed)
+    setClauses.push(`${key} = ${parsed ? `CAST(@${sqlName} AS TIME(7))` : 'NULL'}`)
+  }
+
+  timeField('MorningTimeIn', 'MorningTimeIn')
+  timeField('MorningTimeOut', 'MorningTimeOut')
+  timeField('AfternoonTimeIn', 'AfternoonTimeIn')
+  timeField('AfternoonTimeOut', 'AfternoonTimeOut')
+
+  if (body.Status !== undefined) {
+    req.input('Status', sql.NVarChar(50), body.Status || null)
+    setClauses.push('Status = @Status')
+  }
+
+  if (!setClauses.length) {
+    const err = new Error('No fields to update')
+    err.statusCode = 400
+    throw err
+  }
+
+  const updateSql = `
+    UPDATE dbo.AttendanceRecords
+    SET ${setClauses.join(', ')}
+    WHERE AttendanceID = @AttendanceID
+  `
+
+  try {
+    const result = await req.query(updateSql)
+    if (result.rowsAffected[0] === 0) {
+      const err = new Error('Attendance record not found')
+      err.statusCode = 404
+      throw err
+    }
+  } catch (err) {
+    // Handle unique EmployeeID+AttendanceDate constraint
+    if (err.number === 2627) {
+      err.statusCode = 409
+      err.message = 'Duplicate AttendanceDate for this employee'
+    }
+    throw err
+  }
+
+  const row = await pool.request()
+    .input('AttendanceID', sql.NVarChar(36), id)
+    .query('SELECT * FROM dbo.AttendanceRecords WHERE AttendanceID=@AttendanceID')
+
+  return row.recordset[0] || { AttendanceID: id }
+}
+
+app.put('/attendance/:id', async (req, res) => {
+  try {
+    const pool = await getPool()
+    const updated = await updateAttendanceRecord(pool, req.params.id, req.body || {})
+    res.json(updated)
+  } catch (err) {
+    console.error(err)
+    res.status(err.statusCode || 500).json({ error: err.message })
+  }
+})
+
+// Legacy fallback used by frontend if PUT is blocked
+app.post('/attendance/update', async (req, res) => {
+  const { id, ...payload } = req.body || {}
+  try {
+    const pool = await getPool()
+    const updated = await updateAttendanceRecord(pool, id, payload)
+    res.json(updated)
+  } catch (err) {
+    console.error(err)
+    res.status(err.statusCode || 500).json({ error: err.message })
+  }
+})
+// -------------------------------------------------------------------
+
+
 app.post('/attendance/log', async (req, res) => {
   const { employeeCode, logType } = req.body
 
@@ -1816,115 +1921,75 @@ app.post('/attendance/range', async (req, res) => {
       .input('from', sql.Date, from)
       .input('to', sql.Date, to)
       .query(`
-        SET DATEFIRST 1;
+                SET DATEFIRST 1;
+
+        ;WITH Dates AS (
+          SELECT @from AS dt
+          UNION ALL
+          SELECT DATEADD(day, 1, dt) FROM Dates WHERE dt < @to
+        ),
+        ShiftPick AS (
+          SELECT
+              d.dt,
+              e.EmployeeID,
+              e.EmployeeCode,
+              CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
+              s.ShiftID,
+              s.ShiftName,
+              COALESCE(dss.MorningTimeIn,  s.MorningTimeIn)   AS ReqMorningIn,
+              COALESCE(dss.MorningTimeOut, s.MorningTimeOut)  AS ReqMorningOut,
+              COALESCE(dss.AfternoonTimeIn,  s.AfternoonTimeIn)   AS ReqAfternoonIn,
+              COALESCE(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
+              COALESCE(dss.GracePeriodMinutes, s.GracePeriodMinutes, 0) AS GracePeriodMinutes,
+              ROW_NUMBER() OVER (PARTITION BY d.dt, e.EmployeeID ORDER BY sa.EffectiveFrom DESC) AS rn
+          FROM Dates d
+          JOIN dbo.EmployeeShiftAllotments sa
+            ON d.dt BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, d.dt)
+          JOIN dbo.ShiftDefinitions s
+            ON sa.ShiftID = s.ShiftID
+          LEFT JOIN dbo.ShiftDays sd
+            ON sd.ShiftID = s.ShiftID
+           AND sd.DayOfWeek = CASE WHEN DATEPART(WEEKDAY, d.dt) = 1 THEN 7 ELSE DATEPART(WEEKDAY, d.dt) - 1 END
+          LEFT JOIN dbo.ShiftDaySchedules dss
+            ON dss.ShiftID = s.ShiftID
+           AND dss.DayOfWeek = ISNULL(sd.DayOfWeek, CASE WHEN DATEPART(WEEKDAY, d.dt) = 1 THEN 7 ELSE DATEPART(WEEKDAY, d.dt) - 1 END)
+          JOIN dbo.Employees e
+            ON e.EmployeeID = sa.EmployeeID
+        )
         SELECT
-          a.AttendanceID,
-          a.EmployeeID,
-          e.EmployeeCode,
-          CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
-          CONVERT(varchar(10), a.AttendanceDate, 23) AS AttendanceDate,
-          CONVERT(varchar(5), a.MorningTimeIn, 108) AS MorningTimeIn,
-          CONVERT(varchar(5), a.MorningTimeOut, 108) AS MorningTimeOut,
-          CONVERT(varchar(5), a.AfternoonTimeIn, 108) AS AfternoonTimeIn,
-          CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
-          a.MinutesLate,
-          a.MinutesEarlyLeave,
-          a.Status,
-          sched.ShiftName,
-          CONVERT(varchar(5), sched.ReqMorningIn, 108) AS RequiredMorningIn,
-          CONVERT(varchar(5), sched.ReqMorningOut, 108) AS RequiredMorningOut,
-          CONVERT(varchar(5), sched.ReqAfternoonIn, 108) AS RequiredAfternoonIn,
-          CONVERT(varchar(5), sched.ReqAfternoonOut, 108) AS RequiredAfternoonOut,
-          ISNULL(sched.GracePeriodMinutes, 0) AS GracePeriodMinutes,
-          CASE
-            WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
-            WHEN a.MorningTimeIn IS NULL THEN 'Absent'
-            WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
-            WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
-            ELSE 'On-Time'
-          END AS MorningInStatus,
-          CASE
-            WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
-            WHEN a.MorningTimeOut IS NULL THEN 'Missing'
-            WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
-            WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
-            ELSE 'On-Time'
-          END AS MorningOutStatus,
-          CASE
-            WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
-            WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
-            WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
-            WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
-            ELSE 'On-Time'
-          END AS AfternoonInStatus,
-          CASE
-            WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
-            WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
-            WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
-            WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
-            ELSE 'On-Time'
-          END AS AfternoonOutStatus,
-          CASE
-            WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
-            WHEN
-              (CASE
-                WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
-                WHEN a.MorningTimeIn IS NULL THEN 'Absent'
-                WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
-                WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
-                ELSE 'On-Time'
-              END) = 'Late'
-              OR
-              (CASE
-                WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
-                WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
-                WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
-                WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
-                ELSE 'On-Time'
-              END) = 'Late'
-            THEN 'Late'
-            WHEN
-              (CASE
-                WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
-                WHEN a.MorningTimeOut IS NULL THEN 'Missing'
-                WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
-                WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
-                ELSE 'On-Time'
-              END) = 'Early-Out'
-              OR
-              (CASE
-                WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
-                WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
-                WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
-                WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
-                ELSE 'On-Time'
-              END) = 'Early-Out'
-            THEN 'Early Leave'
-            ELSE ISNULL(a.Status, 'Present')
-          END AS AttendanceSummary
-        FROM dbo.AttendanceRecords a
-        JOIN dbo.Employees e ON a.EmployeeID = e.EmployeeID
-        CROSS APPLY (
-          SELECT CASE WHEN DATEPART(WEEKDAY, a.AttendanceDate) = 1 THEN 7 ELSE DATEPART(WEEKDAY, a.AttendanceDate) - 1 END AS DayNum
-        ) dayinfo
-        OUTER APPLY (
-          SELECT TOP 1
-            s.ShiftName,
-            ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
-            ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
-            ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
-            ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
-            ISNULL(dss.GracePeriodMinutes, s.GracePeriodMinutes) AS GracePeriodMinutes
-          FROM dbo.EmployeeShiftAllotments sa
-          JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID
-          JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID AND sd.DayOfWeek = dayinfo.DayNum
-          LEFT JOIN dbo.ShiftDaySchedules dss ON dss.ShiftID = s.ShiftID AND dss.DayOfWeek = dayinfo.DayNum
-          WHERE sa.EmployeeID = a.EmployeeID
-            AND a.AttendanceDate BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, a.AttendanceDate)
-          ORDER BY sa.EffectiveFrom DESC
-        ) sched
-        WHERE a.AttendanceDate BETWEEN @from AND @to
-        ORDER BY a.AttendanceDate DESC, a.MorningTimeIn DESC
+            ISNULL(a.AttendanceID, NEWID()) AS AttendanceID,
+            sp.EmployeeID,
+            sp.EmployeeCode,
+            sp.EmployeeName,
+            CONVERT(varchar(10), sp.dt, 23) AS AttendanceDate,
+            CONVERT(varchar(5), a.MorningTimeIn, 108)    AS MorningTimeIn,
+            CONVERT(varchar(5), a.MorningTimeOut, 108)   AS MorningTimeOut,
+            CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
+            CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+            sp.ShiftName,
+            CONVERT(varchar(5), sp.ReqMorningIn, 108)     AS RequiredMorningIn,
+            CONVERT(varchar(5), sp.ReqMorningOut, 108)    AS RequiredMorningOut,
+            CONVERT(varchar(5), sp.ReqAfternoonIn, 108)   AS RequiredAfternoonIn,
+            CONVERT(varchar(5), sp.ReqAfternoonOut, 108)  AS RequiredAfternoonOut,
+            sp.GracePeriodMinutes,
+            CASE
+              WHEN a.AttendanceID IS NULL THEN 'Absent'
+              WHEN (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL) THEN 'Incomplete'
+              WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
+              WHEN a.AfternoonTimeIn IS NOT NULL
+                   AND a.AfternoonTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqAfternoonIn) THEN 'Late'
+              ELSE 'On-Time'
+            END AS AttendanceSummary
+        FROM ShiftPick sp
+        LEFT JOIN dbo.AttendanceRecords a
+               ON a.EmployeeID = sp.EmployeeID
+              AND a.AttendanceDate = sp.dt
+        WHERE sp.dt BETWEEN @from AND @to
+          AND sp.dt <= CAST(GETDATE() AS DATE)
+          AND sp.rn = 1
+        OPTION (MAXRECURSION 400);
+
       `)
     res.json(result.recordset)
   } catch (err) {
@@ -2032,8 +2097,3 @@ process.on('SIGINT', async () => {
   try { await sql.close() } catch (e) {}
   process.exit(0)
 })
-
-
-
-
-

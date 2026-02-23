@@ -142,15 +142,30 @@ export default function Scheduler() {
             </Select>
           </FormControl>
           <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
-            <Button size="small" variant="outlined" onClick={() => setSelectedEmployeeIDs(employees.map((e) => e.id))} disabled={assignAll}>
+            <Button
+              size="small"
+              variant="outlined"
+              sx={{ color: 'var(--primary)', borderColor: 'var(--primary)', ':hover': { borderColor: 'var(--primary)', background: 'rgba(0,144,99,0.08)' } }}
+              onClick={() => setSelectedEmployeeIDs(employees.map((e) => e.id))}
+              disabled={assignAll}
+            >
               Select All Employees
             </Button>
-            <Button size="small" variant="outlined" onClick={() => setSelectedEmployeeIDs([])} disabled={assignAll}>
+            <Button
+              size="small"
+              variant="outlined"
+              sx={{ color: 'var(--primary)', borderColor: 'var(--primary)', ':hover': { borderColor: 'var(--primary)', background: 'rgba(0,144,99,0.08)' } }}
+              onClick={() => setSelectedEmployeeIDs([])}
+              disabled={assignAll}
+            >
               Clear
             </Button>
             <Button
               size="small"
               variant={assignAll ? 'contained' : 'outlined'}
+              sx={assignAll
+                ? { background: 'var(--primary)', ':hover': { background: 'var(--primary-dark)' } }
+                : { color: 'var(--primary)', borderColor: 'var(--primary)', ':hover': { borderColor: 'var(--primary)', background: 'rgba(0,144,99,0.08)' } }}
               onClick={() => setAssignAll((prev) => !prev)}
             >
               {assignAll ? 'Assigning To All' : 'Assign To All'}
@@ -196,7 +211,12 @@ export default function Scheduler() {
       )}
 
       <Box sx={{ mt: 3 }}>
-        <Button variant="contained" disabled={!canSubmit || saving} onClick={handleAssign}>
+        <Button
+          variant="contained"
+          disabled={!canSubmit || saving}
+          onClick={handleAssign}
+          sx={{ background: 'var(--primary)', ':hover': { background: 'var(--primary-dark)' } }}
+        >
           {saving ? 'Assigning...' : 'Assign Shift'}
         </Button>
       </Box>

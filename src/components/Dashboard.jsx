@@ -5,10 +5,8 @@ import {
   Paper,
   Typography,
   AppBar,
-  Toolbar,
-  IconButton
+  Toolbar
 } from '@mui/material'
-import MenuIcon from '@mui/icons-material/Menu'
 
 import Sidebar from './Sidebar'
 import EmployeeTable from './EmployeeTable'
@@ -16,27 +14,29 @@ import Scheduler from './Scheduler'
 import UsersPage from './UsersPage'
 import AttendanceRecordsPage from './AttendanceRecordsPage'
 import BiometricScansPage from './BiometricScansPage'
-import SchedulePeriodsPage from './SchedulePeriodsPage'
 import ScheduleDetailsPage from './ScheduleDetailsPage'
 import AuditLogsPage from './AuditLogsPage'
 import SpecialDaysPage from './SpecialDaysPage'
 import DevicesPage from './DevicesPage'
+import OverviewDashboard from './OverviewDashboard'
 import AttendanceReportPage from './AttendanceReportPage'
 
+import bg2 from '../styles/bg2.png'
+
 export default function Dashboard() {
-  const [currentPage, setCurrentPage] = React.useState('employees')
-  const [sidebarExpanded, setSidebarExpanded] = React.useState(true)
+  const [currentPage, setCurrentPage] = React.useState('overview')
+  const [sidebarExpanded, setSidebarExpanded] = React.useState(false)
 
   const renderPage = () => {
     switch (currentPage) {
       case 'employees':
         return <EmployeeTable />
+      case 'overview':
+        return <OverviewDashboard />
       case 'users':
         return <UsersPage />
       case 'devices':
         return <DevicesPage />
-      case 'schedule-periods':
-        return <SchedulePeriodsPage />
       case 'schedule-details':
         return <ScheduleDetailsPage />
       case 'attendance':
@@ -63,21 +63,40 @@ export default function Dashboard() {
       .join(' ')
 
   return (
-    <Box sx={{ display: 'flex' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        position: 'relative',
+        minHeight: '100vh',
+        backgroundImage: `url(${bg2})`,
+        backgroundRepeat: 'no-repeat',
+        backgroundPosition: 'center',
+        backgroundSize: '1500px',
+        backgroundAttachment: 'fixed',
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          inset: 0,
+          backgroundColor: 'rgba(128, 128, 128, 0.32)'
+        }
+      }}
+    >
       
       {/* Sidebar */}
       <Sidebar
         expanded={sidebarExpanded}
         activeMenu={currentPage}
         onMenuClick={setCurrentPage}
+        onHover={(open) => setSidebarExpanded(open)}
       />
 
       {/* Main Content Area */}
       <Box
         sx={{
+          position: 'relative',
           flexGrow: 1,
-          backgroundColor: '#f4f6f8',
-          minHeight: '100vh'
+          minHeight: '100vh',
+          zIndex: 1
         }}
       >
         {/* Top AppBar */}
@@ -85,21 +104,13 @@ export default function Dashboard() {
           position="sticky"
           elevation={0}
           sx={{
-            backgroundColor: '#fff',
-            color: '#000',
-            borderBottom: '1px solid #e0e0e0',
+            backgroundColor: 'var(--surface)',
+            color: 'var(--text)',
+            borderBottom: '1px solid var(--border)',
             zIndex: 1
           }}
         >
           <Toolbar>
-            <IconButton
-              edge="start"
-              onClick={() => setSidebarExpanded(prev => !prev)}
-              sx={{ mr: 2 }}
-            >
-              <MenuIcon />
-            </IconButton>
-
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
               {formatTitle(currentPage)}
             </Typography>
@@ -114,8 +125,10 @@ export default function Dashboard() {
               sx={{
                 p: { xs: 1.5, md: 3 },
                 borderRadius: 3,
-                backgroundColor: '#fff',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+                backgroundColor: 'var(--surface)',
+                color: 'var(--text)',
+                boxShadow: '0 18px 36px rgba(0,0,0,0.3)',
+                border: '1px solid var(--border)',
                 width: '100%'
               }}
             >

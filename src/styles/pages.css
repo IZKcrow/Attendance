@@ -1,3 +1,16 @@
+:root {
+  --primary: #2563eb;           /* blue */
+  --primary-dark: #1e40af;
+  --secondary: #7c3aed;         /* purple */
+  --secondary-light: #ede9fe;
+  --accent: #fbbf24;            /* yellow */
+  --accent-dark: #d97706;
+  --bg: #f6f8ff;
+  --card: #ffffff;
+  --text: #0f172a;
+  --muted: #4b5563;
+}
+
 /* Page Layout */
 .page-container {
   max-width: 1200px;
@@ -6,16 +19,18 @@
 }
 
 .attendance-tracking {
-  background: #f5f7fa;
-  border-radius: 8px;
+  background: var(--surface);
+  border-radius: 12px;
   padding: 30px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.35);
+  border: 1px solid var(--border);
 }
 
 .attendance-tracking h1 {
-  color: #2c3e50;
+  color: var(--text);
   margin-bottom: 30px;
   font-size: 28px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 /* Scan Section Layout */
@@ -34,14 +49,15 @@
 
 /* Scan Card */
 .scan-card {
-  background: white;
+  background: var(--surface);
   border-radius: 12px;
   padding: 25px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 32px rgba(0,0,0,0.28);
+  border: 1px solid var(--border);
 }
 
 .scan-card h3 {
-  color: #2c3e50;
+  color: var(--text);
   margin-bottom: 20px;
   font-size: 18px;
   font-weight: 600;
@@ -55,7 +71,7 @@
 .form-group label {
   display: block;
   margin-bottom: 8px;
-  color: #34495e;
+  color: var(--text);
   font-weight: 500;
   font-size: 14px;
 }
@@ -118,13 +134,383 @@
   height: 18px;
 }
 
+/* Micro animations */
+:root {
+  --elevate-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.page-container,
+.attendance-tracking,
+.scan-card,
+.MuiPaper-root {
+  animation: fadeSlideUp 320ms ease;
+}
+
+.scan-card,
+.MuiPaper-root {
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.scan-card:hover,
+.MuiPaper-root:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--elevate-shadow);
+}
+
+.MuiTableRow-root {
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+
+.MuiTableRow-root:hover {
+  background-color: #f5f8ff;
+  transform: translateY(-1px);
+}
+
+.form-card {
+  display: flex;
+  gap: 16px;
+  row-gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+}
+
+.form-select {
+  min-width: 220px;
+  background: #fdfdfd;
+}
+
+.form-select .MuiOutlinedInput-notchedOutline {
+  border-color: var(--border);
+}
+
+.form-select:hover .MuiOutlinedInput-notchedOutline {
+  border-color: var(--primary);
+}
+
+.form-select.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-color: var(--primary);
+}
+
+.MuiButton-root {
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.MuiButton-root:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
+}
+
+/* Sidebar items */
+.MuiListItemButton-root {
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+
+.MuiListItemButton-root:hover {
+  transform: translateX(2px);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.MuiListItemButton-root.Mui-selected {
+  transform: translateX(0);
+  box-shadow: inset 3px 0 0 #3cc4bf;
+}
+
+/* Chart containers */
+.chart-card {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.chart-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+}
+
+/* Schedule Details Page */
+.schedule-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 10px;
+  background: var(--bg);
+  min-height: 100vh;
+}
+
+.schedule-card {
+  background: var(--surface);
+  padding: 20px;
+  border-radius: 12px;
+  width: 100%;
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--border);
+}
+
+.schedule-dialog {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px !important;
+}
+
+.schedule-dialog .MuiDialogTitle-root,
+.schedule-dialog .MuiDialogContent-root,
+.schedule-dialog .MuiDialogActions-root {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.schedule-dialog .MuiDialogContent-root {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.schedule-dialog .MuiDialogActions-root {
+  border-top: 1px solid var(--border);
+}
+
+.schedule-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.schedule-title {
+  margin: 0;
+  color: var(--text);
+}
+
+.schedule-field {
+  margin-bottom: 16px;
+}
+
+.schedule-label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.schedule-input {
+  width: 100%;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.schedule-row {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.schedule-field-half {
+  flex: 1;
+  min-width: 240px;
+}
+
+.schedule-section {
+  margin-bottom: 12px;
+}
+
+.schedule-section-title {
+  margin: 0 0 6px 0;
+  color: var(--text);
+}
+
+.schedule-helper {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.schedule-days {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.schedule-day-btn {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
+}
+
+.schedule-day-btn:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.schedule-day-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.schedule-secondary-btn {
+  width: 100%;
+  margin-bottom: 14px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.schedule-secondary-btn:hover {
+  transform: translateY(-1px);
+  border-color: var(--primary);
+}
+
+.schedule-group-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 14px;
+  background: var(--surface);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.12);
+}
+
+.schedule-group-header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.schedule-group-label {
+  flex: 1;
+  padding: 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.schedule-remove-btn {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.schedule-remove-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.schedule-alert {
+  padding: 10px;
+  border-radius: 6px;
+  margin-bottom: 15px;
+  font-weight: 600;
+}
+
+.schedule-alert-error {
+  background: rgba(255, 76, 64, 0.08);
+  color: #7d1f1a;
+  border: 1px solid rgba(255, 76, 64, 0.24);
+}
+
+.schedule-alert-success {
+  background: rgba(0, 144, 99, 0.08);
+  color: #0f4d38;
+  border: 1px solid rgba(0, 144, 99, 0.22);
+}
+
+.schedule-details-grid {
+  display: grid;
+  gap: 12px;
+  color: var(--text);
+}
+
+.schedule-pattern-grid {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.schedule-pattern-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--surface);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+}
+
+.schedule-pattern-title {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.schedule-pattern-subtle {
+  color: var(--muted);
+}
+
+/* Buttons with accent */
+.btn-accent {
+  transition: transform 140ms ease, box-shadow 140ms ease;
+  box-shadow: 0 6px 12px rgba(60, 196, 191, 0.25);
+}
+
+.btn-accent:hover {
+  transform: translateY(-1px) scale(1.01);
+  box-shadow: 0 10px 18px rgba(60, 196, 191, 0.32);
+}
+
+/* Inputs subtle pop */
+input[type="text"],
+input[type="date"],
+input[type="month"],
+input[type="number"],
+select {
+  transition: box-shadow 160ms ease, transform 120ms ease, border-color 160ms ease;
+}
+
+input:focus,
+select:focus {
+  transform: translateY(-1px);
+}
+
+.MuiInputBase-root,
+.MuiOutlinedInput-notchedOutline {
+  transition: box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.MuiInputBase-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  box-shadow: 0 0 0 3px rgba(60, 196, 191, 0.25);
+  border-color: #3cc4bf;
+}
+
 .day-checkbox input[type="checkbox"]:checked + span {
   color: #3498db;
   font-weight: 600;
 }
 
 .day-checkbox input[type="checkbox"]:checked {
-  accent-color: #3498db;
+  accent-color: var(--primary);
 }
 
 /* Time Inputs Grid */
@@ -145,7 +531,7 @@
 .btn-primary {
   width: 100%;
   padding: 12px 20px;
-  background: #3498db;
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 6px;
@@ -153,11 +539,12 @@
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.25);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: #2980b9;
-  box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+  background: var(--primary-dark);
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.35);
   transform: translateY(-2px);
 }
 
@@ -296,33 +683,29 @@
 }
 
 .status-on-time {
-  background: #d4edda;
-  color: #155724;
+  background: #0f5132;
+  color: #d1fae5;
 }
 
 .status-late {
-  background: #fff3cd;
-  color: #856404;
+  background: #7c2d12;
+  color: #ffedd5;
 }
 
-.status-early-out {
-  background: #d1ecf1;
-  color: #0c5460;
-}
-
+.status-early-out,
 .status-overtime {
-  background: #d4edda;
-  color: #155724;
+  background: #312e81;
+  color: #ede9fe;
 }
 
 .status-absent {
-  background: #f8d7da;
-  color: #721c24;
+  background: #4c0519;
+  color: #ffe4e6;
 }
 
 .status-pending {
-  background: #e2e3e5;
-  color: #383d41;
+  background: #374151;
+  color: #e5e7eb;
 }
 
 /* Responsive */

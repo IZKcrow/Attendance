@@ -144,15 +144,34 @@ export async function createAttendanceRecord(data) {
   return recordAttendance(data?.employeeCode || data?.EmployeeCode, data?.logType || 'MORNING_IN')
 }
 
-export async function updateAttendanceRecord() {
-  throw new Error('Attendance update is not supported in current backend.')
+export async function updateAttendanceRecord(id, data) {
+  const payload = {
+    AttendanceDate: data?.AttendanceDate || data?.attendanceDate || null,
+    MorningTimeIn: data?.MorningTimeIn || data?.morningIn || null,
+    MorningTimeOut: data?.MorningTimeOut || data?.morningOut || null,
+    AfternoonTimeIn: data?.AfternoonTimeIn || data?.afternoonIn || null,
+    AfternoonTimeOut: data?.AfternoonTimeOut || data?.afternoonOut || null,
+    EmployeeID: data?.EmployeeID || data?.employeeID || null
+  }
+  // Try PUT first; if blocked/404 (mock server), fall back to POST /attendance/update
+  let res = await fetch(`${BASE}/attendance/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  if (res.status === 404 || res.status === 405) {
+    res = await fetch(`${BASE}/attendance/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, ...payload })
+    })
+  }
+  return handleRes(res)
 }
 
 export async function deleteAttendanceRecord() {
   throw new Error('Attendance delete is not supported in current backend.')
 }
-
-
 
 export async function fetchDevices() {
   return fetchAll('devices')

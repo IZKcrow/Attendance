@@ -104,8 +104,37 @@ export default function DevicesPage() {
             <TableCell>{row.LastSeenAt || ''}</TableCell>
             <TableCell>{row.IsActive ? 'Yes' : 'No'}</TableCell>
             <TableCell>
-              <button onClick={() => registerConnection(row)} disabled={busyId === (row.DeviceID || row.DeviceCode)}>Register</button>{' '}
-              <button onClick={() => sendHeartbeat(row)} disabled={busyId === (row.DeviceID || row.DeviceCode)}>Heartbeat</button>
+              <button
+                style={{
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  marginRight: 8,
+                  cursor: 'pointer',
+                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
+                }}
+                onClick={() => registerConnection(row)}
+                disabled={busyId === (row.DeviceID || row.DeviceCode)}
+              >
+                Register
+              </button>
+              <button
+                style={{
+                  background: 'var(--primary)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
+                }}
+                onClick={() => sendHeartbeat(row)}
+                disabled={busyId === (row.DeviceID || row.DeviceCode)}
+              >
+                Heartbeat
+              </button>
             </TableCell>
           </>
         )}

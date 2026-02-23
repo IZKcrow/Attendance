@@ -1,11 +1,49 @@
+@import './styles/pages.css';
+
+:root {
+  /* Palette switch */
+  --bg: #d0d0d0;               /* light gray background */
+  --surface: rgba(229, 229, 229, 0.72);  /* cards/tables, slightly transparent */
+  --card: rgba(229, 229, 229, 0.72);
+  --border: #c7cdd1;
+  --text: #323232;             /* dark text */
+  --muted: #6b7280;
+
+  --secondary: #323232;        /* secondary (sidebar) */
+  --secondary-dark: #1f1f1f;
+
+  --primary: #009063;          /* accent */
+  --primary-dark: #006b4b;
+  --primary-light: #00a877;
+}
+
 body {
   font-family: Inter, Roboto, Arial, sans-serif;
-  background: #f5f7fa;
+  background: var(--bg);
+  position: relative;
+  min-height: 100vh;
   margin: 0;
+  color: var(--text);
 }
 
 .MuiPaper-root {
-  background: #fff;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(6px);
+}
+
+.MuiTableCell-root {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.MuiTypography-root {
+  color: var(--text);
+}
+
+.MuiInputBase-input {
+  color: var(--text);
 }
 
 /* small responsive tweaks */
