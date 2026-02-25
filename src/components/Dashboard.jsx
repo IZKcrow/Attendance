@@ -82,7 +82,7 @@ export default function Dashboard({ onLogout }) {
       }}
     >
       
-      {/* Sidebar */}
+     {/* Sidebar */}
       <Sidebar
         expanded={sidebarExpanded}
         activeMenu={currentPage}

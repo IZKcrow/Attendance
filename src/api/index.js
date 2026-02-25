@@ -1,9 +1,35 @@
 const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 
+function buildApiError(res, text) {
+  let payload = null
+  let message = ''
+  try {
+    payload = text ? JSON.parse(text) : null
+  } catch (_) {
+    payload = null
+  }
+
+  if (payload && typeof payload === 'object') {
+    message = payload.error || payload.message || ''
+  }
+  if (!message) {
+    message = text || `${res.status} ${res.statusText}`
+  }
+  if (!message) {
+    message = 'Request failed'
+  }
+
+  const err = new Error(message)
+  err.status = res.status
+  err.statusText = res.statusText
+  err.payload = payload
+  return err
+}
+
 async function handleRes(res) {
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText} ${text}`)
+    throw buildApiError(res, text)
   }
   return res.json().catch(() => null)
 }
@@ -285,7 +311,9 @@ export async function deleteRecord(endpoint, id) {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
-    throw new Error(`Delete failed: ${res.status} ${res.statusText} ${text}`)
+    const err = buildApiError(res, text)
+    err.message = `Delete failed: ${err.message}`
+    throw err
   }
   return true
 }
@@ -373,5 +401,4 @@ export async function assignShiftToEmployees({
     effectiveTo
   })
 }
-
 

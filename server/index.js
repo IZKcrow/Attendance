@@ -1126,7 +1126,7 @@ async function processAttendanceLog(pool, { employeeID, logType, now = new Date(
       AND sd.DayOfWeek=@TodayDay
     `)
   if (!shiftResult.recordset.length) {
-    const err = new Error('No shift assigned')
+    const err = new Error('No shift assigned for this employee today')
     err.statusCode = 400
     throw err
   }
@@ -1255,9 +1255,69 @@ async function updateAttendanceRecord(pool, id, body = {}) {
     WHERE AttendanceID = @AttendanceID
   `
 
+  const upsertByEmployeeDate = async () => {
+    const employeeID = body.EmployeeID || null
+    const attendanceDate = body.AttendanceDate || null
+    if (!employeeID || !attendanceDate) return null
+
+    const parseOptTime = (v) => (v ? parseTimeString(v) : null)
+    const mIn = parseOptTime(body.MorningTimeIn)
+    const mOut = parseOptTime(body.MorningTimeOut)
+    const aIn = parseOptTime(body.AfternoonTimeIn)
+    const aOut = parseOptTime(body.AfternoonTimeOut)
+    const status = body.Status !== undefined ? (body.Status || null) : null
+
+    const result = await pool.request()
+      .input('EmployeeID', sql.NVarChar(36), employeeID)
+      .input('AttendanceDate', sql.Date, attendanceDate)
+      .input('MorningTimeIn', sql.VarChar(8), mIn)
+      .input('MorningTimeOut', sql.VarChar(8), mOut)
+      .input('AfternoonTimeIn', sql.VarChar(8), aIn)
+      .input('AfternoonTimeOut', sql.VarChar(8), aOut)
+      .input('Status', sql.NVarChar(50), status)
+      .query(`
+        IF EXISTS (
+          SELECT 1 FROM dbo.AttendanceRecords
+          WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate
+        )
+        BEGIN
+          UPDATE dbo.AttendanceRecords
+          SET
+            MorningTimeIn = CASE WHEN @MorningTimeIn IS NULL THEN MorningTimeIn ELSE CAST(@MorningTimeIn AS TIME(7)) END,
+            MorningTimeOut = CASE WHEN @MorningTimeOut IS NULL THEN MorningTimeOut ELSE CAST(@MorningTimeOut AS TIME(7)) END,
+            AfternoonTimeIn = CASE WHEN @AfternoonTimeIn IS NULL THEN AfternoonTimeIn ELSE CAST(@AfternoonTimeIn AS TIME(7)) END,
+            AfternoonTimeOut = CASE WHEN @AfternoonTimeOut IS NULL THEN AfternoonTimeOut ELSE CAST(@AfternoonTimeOut AS TIME(7)) END,
+            Status = CASE WHEN @Status IS NULL THEN Status ELSE @Status END
+          WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate;
+        END
+        ELSE
+        BEGIN
+          INSERT INTO dbo.AttendanceRecords(
+            EmployeeID, AttendanceDate, MorningTimeIn, MorningTimeOut, AfternoonTimeIn, AfternoonTimeOut, Status
+          ) VALUES (
+            @EmployeeID,
+            @AttendanceDate,
+            CAST(@MorningTimeIn AS TIME(7)),
+            CAST(@MorningTimeOut AS TIME(7)),
+            CAST(@AfternoonTimeIn AS TIME(7)),
+            CAST(@AfternoonTimeOut AS TIME(7)),
+            @Status
+          );
+        END;
+
+        SELECT TOP 1 *
+        FROM dbo.AttendanceRecords
+        WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate;
+      `)
+
+    return result.recordset[0] || null
+  }
+
   try {
     const result = await req.query(updateSql)
     if (result.rowsAffected[0] === 0) {
+      const upserted = await upsertByEmployeeDate()
+      if (upserted) return upserted
       const err = new Error('Attendance record not found')
       err.statusCode = 404
       throw err
@@ -1315,7 +1375,29 @@ app.post('/attendance/log', async (req, res) => {
 
     if (!empResult.recordset.length) return res.status(404).json({ error: 'Employee not found' })
     const employeeID = empResult.recordset[0].EmployeeID
-    const result = await processAttendanceLog(pool, { employeeID, logType })
+    const todayStr = new Date().toISOString().split('T')[0]
+    const att = await pool.request()
+      .input('EmployeeID', sql.NVarChar(36), employeeID)
+      .input('AttendanceDate', sql.Date, todayStr)
+      .query(`
+        SELECT MorningTimeIn, MorningTimeOut, AfternoonTimeIn, AfternoonTimeOut
+        FROM dbo.AttendanceRecords
+        WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate
+      `)
+
+    const nextLogType = getNextAttendanceLogType(att.recordset[0] || null)
+    if (!nextLogType) {
+      return res.status(409).json({ error: 'Attendance already complete for today' })
+    }
+
+    const requestedLogType = logType || nextLogType
+    if (requestedLogType !== nextLogType) {
+      return res.status(409).json({
+        error: `Invalid log sequence. Next expected log is ${nextLogType}.`
+      })
+    }
+
+    const result = await processAttendanceLog(pool, { employeeID, logType: requestedLogType })
 
     await writeAuditLog(pool, {
       actor: employeeCode || 'SYSTEM',

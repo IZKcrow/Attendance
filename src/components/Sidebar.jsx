@@ -41,8 +41,8 @@ const OTHER_ITEMS = [
 ]
 
 export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, onLogout }) {
-  const [openSchedule, setOpenSchedule] = React.useState(true)
-  const [openAttendance, setOpenAttendance] = React.useState(true)
+  const [openSchedule, setOpenSchedule] = React.useState(false)
+  const [openAttendance, setOpenAttendance] = React.useState(false)
   const textColor = '#f5f5f5'
 
   return (
@@ -108,7 +108,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
             {expanded && (openSchedule ? <ExpandLess sx={{ color: textColor }} /> : <ExpandMore sx={{ color: textColor }} />)}
           </ListItemButton>
         </ListItem>
-        <Collapse in={openSchedule} timeout="auto" unmountOnExit>
+        <Collapse in={expanded && openSchedule} timeout="auto" unmountOnExit>
           {SCHEDULE_GROUP.map(item => (
             <ListItem disablePadding key={item.id}>
               <ListItemButton
@@ -151,7 +151,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
             {expanded && (openAttendance ? <ExpandLess sx={{ color: textColor }} /> : <ExpandMore sx={{ color: textColor }} />)}
           </ListItemButton>
         </ListItem>
-        <Collapse in={openAttendance} timeout="auto" unmountOnExit>
+        <Collapse in={expanded && openAttendance} timeout="auto" unmountOnExit>
           {ATTENDANCE_GROUP.map(item => (
             <ListItem disablePadding key={item.id}>
               <ListItemButton
