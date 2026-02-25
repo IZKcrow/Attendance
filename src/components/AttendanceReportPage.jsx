@@ -270,7 +270,7 @@ export default function AttendanceReportPage() {
 
       <GenericDataTable
         title="Details"
-        columns={['Date', 'Name', 'Shift', 'Status', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours']}
+        columns={['Name', 'Shift', 'Date', 'Status', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours']}
         data={records.filter((r) => {
           if (statusFilter === 'all') return true
           const s = (r.AttendanceSummary || r.Status || '').toLowerCase()
@@ -290,9 +290,9 @@ export default function AttendanceReportPage() {
         onDelete={() => {}}
         renderRow={(row) => (
           <>
-            <TableCell>{fmtDate(row.AttendanceDate)}</TableCell>
             <TableCell>{row.EmployeeName}</TableCell>
             <TableCell>{row.__ShiftResolved || row.ShiftName || row.shiftName || row.Shift || row.shift || 'No shift'}</TableCell>
+            <TableCell>{fmtDate(row.AttendanceDate)}</TableCell>
             <TableCell>{renderStatusBadge(row.AttendanceSummary || row.Status || '-')}</TableCell>
             <TableCell>{fmtTime(row.MorningTimeIn)}</TableCell>
             <TableCell>{fmtTime(row.MorningTimeOut)}</TableCell>

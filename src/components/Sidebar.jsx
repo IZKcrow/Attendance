@@ -40,7 +40,7 @@ const OTHER_ITEMS = [
   { id: 'audit-logs', label: 'Audit Logs', icon: HistoryIcon }
 ]
 
-export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover }) {
+export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, onLogout }) {
   const [openSchedule, setOpenSchedule] = React.useState(true)
   const [openAttendance, setOpenAttendance] = React.useState(true)
   const textColor = '#f5f5f5'
@@ -203,6 +203,32 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover }) 
             </ListItemButton>
           </ListItem>
         ))}
+
+        {/* Logout */}
+        <ListItem disablePadding>
+          <ListItemButton
+            onClick={() => {
+              onLogout?.()
+              onMenuClick?.('overview')
+            }}
+            sx={{
+              justifyContent: expanded ? 'flex-start' : 'center',
+              py: 2,
+              mt: 1,
+              '&:hover': { backgroundColor: 'rgba(255,255,255,0.15)' }
+            }}
+          >
+            <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 40 : 'auto' }}>
+              <LogoutIcon />
+            </ListItemIcon>
+            {expanded && (
+              <ListItemText
+                primary="Logout"
+                primaryTypographyProps={{ color: textColor, fontWeight: 700 }}
+              />
+            )}
+          </ListItemButton>
+        </ListItem>
       </List>
     </Drawer>
   )

@@ -23,7 +23,7 @@ import AttendanceReportPage from './AttendanceReportPage'
 
 import bg2 from '../styles/bg2.png'
 
-export default function Dashboard() {
+export default function Dashboard({ onLogout }) {
   const [currentPage, setCurrentPage] = React.useState('overview')
   const [sidebarExpanded, setSidebarExpanded] = React.useState(false)
 
@@ -88,6 +88,7 @@ export default function Dashboard() {
         activeMenu={currentPage}
         onMenuClick={setCurrentPage}
         onHover={(open) => setSidebarExpanded(open)}
+        onLogout={onLogout}
       />
 
       {/* Main Content Area */}

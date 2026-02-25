@@ -26,6 +26,15 @@ export async function createRecord(endpoint, data) {
   return handleRes(res)
 }
 
+export async function login(username, password) {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  return handleRes(res)
+}
+
 export async function fetchUsers() {
   const rows = await fetchAll('employees')
   if (!Array.isArray(rows)) return []

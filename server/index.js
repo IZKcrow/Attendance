@@ -1333,6 +1333,22 @@ app.post('/attendance/log', async (req, res) => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// Simple demo authentication (hard-coded admin/admin)
+app.post('/auth/login', (req, res) => {
+  const { username, password } = req.body || {}
+  if (username === 'admin' && password === 'admin') {
+    const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
+    return res.json({
+      success: true,
+      token,
+      user: { username: 'admin', role: 'admin' }
+    })
+  }
+  return res.status(401).json({ error: 'Invalid credentials' })
+})
+// ---------------------------------------------------------------------------
+
 app.post('/face-scan/recognize', async (req, res) => {
   const { employeeCode, deviceCode, matchScore, rawImageRef, latitude, longitude, actor } = req.body || {}
   if (!employeeCode) return res.status(400).json({ error: 'employeeCode is required (prototype mode)' })
@@ -1654,6 +1670,17 @@ app.get('/biometric-scans', async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+
+app.post('/auth/login', (req, res) => {
+  const { username, password } = req.body || {}
+  if (username === 'admin' && password === 'admin') {
+    // super-simple session token (not secure; demo only)
+    const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
+    return res.json({ success: true, token, user: { username: 'admin', role: 'admin' } })
+  }
+  return res.status(401).json({ error: 'Invalid credentials' })
+})
+
 
 app.post('/biometric-scans', async (req, res) => {
   const {
