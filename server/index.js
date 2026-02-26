@@ -611,8 +611,40 @@ app.post('/shift-definitions', async (req, res) => {
       })
     }
 
+    const toMinuteValue = (literal) => {
+      const m = String(literal || '').match(/^(\d{2}):(\d{2}):(\d{2})$/)
+      if (!m) return null
+      const h = Number(m[1])
+      const min = Number(m[2])
+      const sec = Number(m[3])
+      return (h * 60) + min + (sec / 60)
+    }
+    const validateTimeOrder = (morningIn, morningOut, afternoonIn, afternoonOut, label) => {
+      const mi = toMinuteValue(morningIn)
+      const mo = toMinuteValue(morningOut)
+      const ai = toMinuteValue(afternoonIn)
+      const ao = toMinuteValue(afternoonOut)
+      if ([mi, mo, ai, ao].some((v) => v == null)) return `${label}: invalid time format.`
+      if (mi >= mo) return `${label}: morning out must be after morning in.`
+      if (ai >= ao) return `${label}: afternoon out must be after afternoon in.`
+      if (ai <= mo) return `${label}: afternoon must start after morning ends.`
+      return null
+    }
+
+    const baseOrderError = validateTimeOrder(
+      parsedBaseMorningIn,
+      parsedBaseMorningOut,
+      parsedBaseAfternoonIn,
+      parsedBaseAfternoonOut,
+      'Base shift'
+    )
+    if (baseOrderError) {
+      return res.status(400).json({ error: baseOrderError })
+    }
+
     const normalizedPatterns = []
     if (hasPatterns) {
+      const usedDays = new Set()
       for (let i = 0; i < Patterns.length; i += 1) {
         const p = Patterns[i] || {}
         const pDays = Array.isArray(p.days) ? p.days.map(normalizeDay).filter((d) => d >= 1 && d <= 7) : []
@@ -633,6 +665,22 @@ app.post('/shift-definitions', async (req, res) => {
               AfternoonTimeOut: p.afternoonOut || p.AfternoonTimeOut || null
             }
           })
+        }
+        const orderError = validateTimeOrder(
+          pMorningIn,
+          pMorningOut,
+          pAfternoonIn,
+          pAfternoonOut,
+          `Pattern ${i + 1}`
+        )
+        if (orderError) {
+          return res.status(400).json({ error: orderError })
+        }
+        for (const day of Array.from(new Set(pDays))) {
+          if (usedDays.has(day)) {
+            return res.status(400).json({ error: `Pattern ${i + 1}: day overlap is not allowed across patterns.` })
+          }
+          usedDays.add(day)
         }
         normalizedPatterns.push({
           days: Array.from(new Set(pDays)),
@@ -1432,7 +1480,7 @@ app.post('/auth/login', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.post('/face-scan/recognize', async (req, res) => {
-  const { employeeCode, deviceCode, matchScore, rawImageRef, latitude, longitude, actor } = req.body || {}
+  const { employeeCode, deviceCode, rawImageRef, latitude, longitude, actor } = req.body || {}
   if (!employeeCode) return res.status(400).json({ error: 'employeeCode is required (prototype mode)' })
 
   try {
@@ -1481,7 +1529,8 @@ app.post('/face-scan/recognize', async (req, res) => {
     scanReq.input('DeviceID', sql.NVarChar(36), deviceID)
     scanReq.input('ScanType', sql.NVarChar(50), 'FACE')
     scanReq.input('AuthenticationMethod', sql.NVarChar(50), 'FACE_MATCH')
-    scanReq.input('MatchScore', sql.Decimal(5, 2), matchScore ?? 99.0)
+    // Do not trust score from client; keep deterministic server-side value for prototype flow.
+    scanReq.input('MatchScore', sql.Decimal(5, 2), 99.0)
     scanReq.input('ScanResult', sql.NVarChar(30), 'SUCCESS')
     scanReq.input('IsSuccessful', sql.Bit, true)
     scanReq.input('RawImageRef', sql.NVarChar(500), rawImageRef || null)

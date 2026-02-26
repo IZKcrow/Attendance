@@ -65,32 +65,38 @@ const darkCard = {
 }
 
 function toDateStr(d) {
-  const x = new Date(d)
-  x.setMinutes(x.getMinutes() - x.getTimezoneOffset())
-  return x.toISOString().slice(0, 10)
+  if (!d) return ''
+  const date = new Date(d)
+  if (Number.isNaN(date.getTime())) return ''
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-')
 }
 
-function groupByDate(records) {
-  const map = new Map()
-  records.forEach(r => {
-    const day = toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt || new Date())
-    if (!map.has(day)) map.set(day, [])
-    map.get(day).push(r)
-  })
-  return map
+function computeFlags(r) {
+  const status = (r.AttendanceSummary || r.Status || '').toLowerCase()
+  const late = status.includes('late') || (r.MinutesLate || 0) > 0
+  const absent = status.includes('absent')
+  const earlyLeave = status.includes('early') || (r.MinutesEarlyLeave || 0) > 0
+  const missing = !(r.MorningTimeIn && r.MorningTimeOut && r.AfternoonTimeIn && r.AfternoonTimeOut)
+  const incomplete = !absent && missing
+  const onTime = !absent && !late && !earlyLeave && !incomplete
+  return { onTime, late, absent, earlyLeave, incomplete }
 }
 
-function enrichToday(records) {
-  return records.map(r => {
-    const status = (r.AttendanceSummary || r.Status || '').toLowerCase()
-    const late = status.includes('late') || (r.MinutesLate || 0) > 0
-    const absent = status.includes('absent')
-    const earlyLeave = status.includes('early') || (r.MinutesEarlyLeave || 0) > 0
-    const missing = !(r.MorningTimeIn && r.MorningTimeOut && r.AfternoonTimeIn && r.AfternoonTimeOut)
-    const incomplete = !absent && missing
-    const onTime = !absent && !late && !earlyLeave && !incomplete
-    return { ...r, flags: { onTime, late, absent, earlyLeave, incomplete } }
-  })
+function summarizeRecords(records = []) {
+  return records.reduce((acc, r) => {
+    const flags = computeFlags(r)
+    if (flags.onTime) acc.onTime += 1
+    if (flags.late) acc.late += 1
+    if (flags.absent) acc.absent += 1
+    if (flags.earlyLeave) acc.earlyLeave += 1
+    if (flags.incomplete) acc.incomplete += 1
+    acc.totalLogs += 1
+    return acc
+  }, { onTime: 0, late: 0, absent: 0, earlyLeave: 0, incomplete: 0, totalLogs: 0 })
 }
 
 export default function OverviewDashboard() {
@@ -101,10 +107,16 @@ export default function OverviewDashboard() {
   const [loadingDept, setLoadingDept] = React.useState(true)
   const [loadingRecent, setLoadingRecent] = React.useState(true)
   const [now, setNow] = React.useState(new Date())
+  const isMountedRef = React.useRef(true)
 
   React.useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
+  }, [])
+
+  React.useEffect(() => {
+    isMountedRef.current = true
+    return () => { isMountedRef.current = false }
   }, [])
 
   React.useEffect(() => {
@@ -116,6 +128,7 @@ export default function OverviewDashboard() {
   const loadEmployees = async () => {
     try {
       const data = await api.fetchEmployees()
+      if (!isMountedRef.current) return
       setEmployees(Array.isArray(data) ? data : [])
     } catch (_) {}
   }
@@ -128,10 +141,13 @@ export default function OverviewDashboard() {
       const from = toDateStr(new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000))
       const to = toDateStr(today)
       const attData = await api.fetchAttendanceByRange(from, to)
+      if (!isMountedRef.current) return
       setOverviewRecords(Array.isArray(attData) ? attData : [])
     } catch (_) {
+      if (!isMountedRef.current) return
       setOverviewRecords([])
     } finally {
+      if (!isMountedRef.current) return
       setLoadingOverview(false)
       setLoadingRecent(false)
     }
@@ -141,39 +157,31 @@ export default function OverviewDashboard() {
     try {
       setLoadingDept(true)
       const attData = await api.fetchAttendanceToday()
+      if (!isMountedRef.current) return
       setTodayRecords(Array.isArray(attData) ? attData : [])
     } catch (_) {
+      if (!isMountedRef.current) return
       setTodayRecords([])
     } finally {
+      if (!isMountedRef.current) return
       setLoadingDept(false)
     }
   }
 
-  const todayStr = React.useMemo(() => toDateStr(new Date()), [])
+  const todayStr = React.useMemo(() => toDateStr(now), [now])
   const yesterdayStr = React.useMemo(() => {
-    const d = new Date()
+    const d = new Date(now)
     d.setDate(d.getDate() - 1)
     return toDateStr(d)
-  }, [])
-
-  const computeStats = React.useCallback(records => {
-    const enriched = enrichToday(records)
-    const onTime = enriched.filter(r => r.flags.onTime).length
-    const late = enriched.filter(r => r.flags.late).length
-    const absent = enriched.filter(r => r.flags.absent).length
-    const earlyLeave = enriched.filter(r => r.flags.earlyLeave).length
-    const incomplete = enriched.filter(r => r.flags.incomplete).length
-    const totalLogs = enriched.length
-    return { onTime, late, absent, earlyLeave, incomplete, totalLogs }
-  }, [])
+  }, [now])
 
   // Stats (today / yesterday)
-  const stats = React.useMemo(() => computeStats(todayRecords), [todayRecords, computeStats])
+  const stats = React.useMemo(() => summarizeRecords(todayRecords), [todayRecords])
   const yesterdayRecords = React.useMemo(
     () => overviewRecords.filter(r => toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt) === yesterdayStr),
     [overviewRecords, yesterdayStr]
   )
-  const yesterdayStats = React.useMemo(() => computeStats(yesterdayRecords), [yesterdayRecords, computeStats])
+  const yesterdayStats = React.useMemo(() => summarizeRecords(yesterdayRecords), [yesterdayRecords])
 
   const makeDelta = (todayVal, prevVal, goodWhen = 'up') => {
     if (prevVal === undefined || prevVal === null) return { text: 'No yesterday data', tone: 'neutral' }
@@ -258,9 +266,22 @@ export default function OverviewDashboard() {
     return { labels, percents, totals, present }
   }, [employees, todayRecords])
 
+  const summaryByDate = React.useMemo(() => {
+    const map = new Map()
+    overviewRecords.forEach((r) => {
+      const key = toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt)
+      if (!key) return
+      const entry = map.get(key) || { onTime: 0, total: 0 }
+      const flags = computeFlags(r)
+      if (flags.onTime) entry.onTime += 1
+      entry.total += 1
+      map.set(key, entry)
+    })
+    return map
+  }, [overviewRecords])
+
   // Comparison chart (last 14 days on-time rate)
   const comparisonData = React.useMemo(() => {
-    const map = groupByDate(overviewRecords)
     const days = Array.from({ length: 14 }).map((_, idx) => {
       const d = new Date()
       d.setDate(d.getDate() - (13 - idx))
@@ -268,17 +289,17 @@ export default function OverviewDashboard() {
     })
     const rates = days.map(dayObj => {
       const key = toDateStr(dayObj)
-      const recs = map.get(key) || []
-      if (!recs.length) return 0
-      const enriched = enrichToday(recs)
-      const onTime = enriched.filter(r => r.flags.onTime).length
-      return Math.round((onTime / recs.length) * 100)
+      const summary = summaryByDate.get(key)
+      if (!summary || !summary.total) return 0
+      return Math.round((summary.onTime / summary.total) * 100)
     })
     const labels = days.map(d =>
       d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     )
     return { labels, rates }
-  }, [overviewRecords])
+  }, [summaryByDate])
+
+  const recentLogs = React.useMemo(() => getRecentLogs(todayRecords), [todayRecords])
 
   return (
     <Box sx={{ display: 'grid', gap: 2 }}>
@@ -412,7 +433,7 @@ export default function OverviewDashboard() {
               </Box>
             </Box>
             <Box component="tbody">
-              {getRecentLogs(todayRecords).map((row, idx) => (
+              {recentLogs.map((row, idx) => (
                 <Box component="tr" key={idx}>
                   <Box component="td" sx={{ padding: '8px', borderBottom: `1px solid ${accent.border}` }}>{row.EmployeeName || row.EmployeeCode || '-'}</Box>
                   <Box component="td" sx={{ padding: '8px', borderBottom: `1px solid ${accent.border}` }}>{row.AttendanceDate || '-'}</Box>
@@ -420,7 +441,7 @@ export default function OverviewDashboard() {
                   <Box component="td" sx={{ padding: '8px', borderBottom: `1px solid ${accent.border}` }}>{renderStatusChip(row.AttendanceSummary || row.Status || '-', accent)}</Box>
                 </Box>
               ))}
-              {getRecentLogs(todayRecords).length === 0 && (
+              {recentLogs.length === 0 && (
                 <Box component="tr">
                   <Box component="td" colSpan={4} sx={{ padding: '10px', textAlign: 'center' }}>No recent logs</Box>
                 </Box>
