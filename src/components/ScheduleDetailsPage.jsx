@@ -1,20 +1,6 @@
 //ScheduleDetailsPage.jsx
 import React, { useState, useEffect } from 'react'
-import {
-  TableCell,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Button,
-  Slide,
-  TextField,
-  Alert,
-  Box,
-  Stack,
-  Typography,
-  MenuItem
-} from '@mui/material'
+import { TableCell, Dialog, DialogTitle, DialogContent, DialogActions, Button, Slide } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
 
@@ -33,17 +19,11 @@ const Transition = React.forwardRef(function Transition(props, ref) {
   return <Slide direction="up" ref={ref} {...props} />
 })
 
-const toMinutes = (value) => {
-  if (!value || typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) return null
-  const [h, m] = value.split(':').map(Number)
-  return h * 60 + m
-}
-
 export default function ScheduleDetailsPage() {
   const [periods, setPeriods] = useState([])
   const [periodLoading, setPeriodLoading] = useState(true)
   const [periodError, setPeriodError] = useState(null)
-  const [selectedPeriodId, setSelectedPeriodId] = useState(null)
+  const [selectedPeriod, setSelectedPeriod] = useState(null)
 
   const [showForm, setShowForm] = useState(false)
   const [shiftName, setShiftName] = useState('')
@@ -52,9 +32,6 @@ export default function ScheduleDetailsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [periodSort, setPeriodSort] = useState('name-asc')
-
-  const selectedPeriodData = periods.find((p) => p.SchedulePeriodID === selectedPeriodId) || null
 
   useEffect(() => {
     loadPeriods()
@@ -113,27 +90,6 @@ export default function ScheduleDetailsPage() {
       if (!g.days.length) return `Pattern ${i + 1}: select at least one day.`
       if (!g.morningIn || !g.morningOut || !g.afternoonIn || !g.afternoonOut) {
         return `Pattern ${i + 1}: all time fields are required.`
-      }
-      const morningInMin = toMinutes(g.morningIn)
-      const morningOutMin = toMinutes(g.morningOut)
-      const afternoonInMin = toMinutes(g.afternoonIn)
-      const afternoonOutMin = toMinutes(g.afternoonOut)
-      if (
-        morningInMin == null ||
-        morningOutMin == null ||
-        afternoonInMin == null ||
-        afternoonOutMin == null
-      ) {
-        return `Pattern ${i + 1}: invalid time format.`
-      }
-      if (morningInMin >= morningOutMin) {
-        return `Pattern ${i + 1}: Morning out must be after morning in.`
-      }
-      if (afternoonInMin >= afternoonOutMin) {
-        return `Pattern ${i + 1}: Afternoon out must be after afternoon in.`
-      }
-      if (afternoonInMin <= morningOutMin) {
-        return `Pattern ${i + 1}: Afternoon must start after morning ends.`
       }
       for (const d of g.days) {
         if (seen.has(d)) return `Day "${d}" is repeated across patterns.`
@@ -221,17 +177,6 @@ export default function ScheduleDetailsPage() {
     return Array.from(new Set(mapped)).join('-')
   }
 
-  const displayedPeriods = React.useMemo(() => {
-    const arr = Array.isArray(periods) ? [...periods] : []
-    arr.sort((a, b) => {
-      const nameA = String(a?.PeriodName || '').toLowerCase()
-      const nameB = String(b?.PeriodName || '').toLowerCase()
-      if (periodSort === 'name-desc') return nameB.localeCompare(nameA)
-      return nameA.localeCompare(nameB)
-    })
-    return arr
-  }, [periods, periodSort])
-
   return (
     <div className="schedule-wrapper">
       <div className="schedule-card" style={{ marginBottom: 20 }}>
@@ -257,24 +202,10 @@ export default function ScheduleDetailsPage() {
           </Button>
         </div>
 
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 1.5 }}>
-          <TextField
-            select
-            size="small"
-            label="Sort"
-            value={periodSort}
-            onChange={(e) => setPeriodSort(e.target.value)}
-            sx={{ width: 220 }}
-          >
-            <MenuItem value="name-asc">Name (A-Z)</MenuItem>
-            <MenuItem value="name-desc">Name (Z-A)</MenuItem>
-          </TextField>
-        </Stack>
-
         <GenericDataTable
           title=""
           columns={['Period Name', 'Days']}
-          data={displayedPeriods}
+          data={periods}
           loading={periodLoading}
           error={periodError}
           primaryKeyField="SchedulePeriodID"
@@ -282,7 +213,7 @@ export default function ScheduleDetailsPage() {
           allowDelete={false}
           allowAdd={false}
           allowEdit={false}
-          onRowClick={(row) => setSelectedPeriodId(row.SchedulePeriodID)}
+          onRowClick={(row) => setSelectedPeriod(row)}
           renderRow={(row) => (
             <>
               <TableCell>{row.PeriodName}</TableCell>
@@ -302,140 +233,127 @@ export default function ScheduleDetailsPage() {
       >
         <DialogTitle>Create Shift</DialogTitle>
         <DialogContent dividers>
-          <Box component="form" id="create-shift-form" onSubmit={handleSubmit}>
-            <Stack spacing={1.5}>
-              {error && <Alert severity="error">{error}</Alert>}
-              {success && <Alert severity="success">{success}</Alert>}
+          <form id="create-shift-form" onSubmit={handleSubmit}>
+            {error && <div className="schedule-alert schedule-alert-error">{error}</div>}
+            {success && <div className="schedule-alert schedule-alert-success">{success}</div>}
 
-              <TextField
-                label="Shift Name"
+            <div className="schedule-field">
+              <label className="schedule-label">Shift Name</label>
+              <input
+                type="text"
                 value={shiftName}
                 onChange={(e) => setShiftName(e.target.value)}
+                className="schedule-input"
                 placeholder="e.g. Office Schedule"
-                size="small"
-                fullWidth
               />
+            </div>
 
-              <TextField
+            <div className="schedule-field">
+              <label className="schedule-label">Grace Period (minutes)</label>
+              <input
                 type="number"
-                label="Grace Period (minutes)"
-                inputProps={{ min: 0 }}
+                min="0"
                 value={grace}
                 onChange={(e) => setGrace(e.target.value)}
-                size="small"
-                fullWidth
+                className="schedule-input"
               />
+            </div>
 
-              <Box>
-                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Day/Time Patterns</Typography>
-                <Typography variant="body2" sx={{ color: 'var(--muted)' }}>
-                  Define patterns of days with morning and afternoon times. Days cannot overlap between patterns.
-                </Typography>
-              </Box>
+            <div className="schedule-section">
+              <h4 className="schedule-section-title">Day/Time Patterns</h4>
+              <p className="schedule-helper">Define patterns of days with morning/afternoon times. Days cannot overlap between patterns.</p>
+            </div>
 
-              {groups.map((group, idx) => (
-                <Box
-                  key={idx}
-                  sx={{
-                    p: 1.5,
-                    border: '1px solid var(--border)',
-                    borderRadius: 2,
-                    background: 'var(--surface)'
-                  }}
-                >
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 1 }}>
-                    <TextField
-                      label="Pattern Label"
-                      value={group.label}
-                      onChange={(e) => updateGroup(idx, { label: e.target.value })}
-                      placeholder={`Pattern ${idx + 1}`}
-                      size="small"
-                      fullWidth
-                    />
-                    <Button
-                      type="button"
-                      variant="outlined"
-                      color="error"
-                      onClick={() => removeGroup(idx)}
-                      disabled={groups.length === 1}
-                    >
-                      Remove
-                    </Button>
-                  </Stack>
+            {groups.map((group, idx) => (
+              <div key={idx} className="schedule-group-card">
+                <div className="schedule-group-header">
+                  <input
+                    type="text"
+                    value={group.label}
+                    onChange={(e) => updateGroup(idx, { label: e.target.value })}
+                    className="schedule-group-label"
+                    placeholder={`Pattern ${idx + 1}`}
+                  />
+                  <button
+                    type="button"
+                    className="schedule-remove-btn"
+                    onClick={() => removeGroup(idx)}
+                    disabled={groups.length === 1}
+                  >
+                    Remove
+                  </button>
+                </div>
 
-                  <Typography variant="caption" sx={{ display: 'block', mb: 0.7, color: 'var(--muted)' }}>
-                    Days
-                  </Typography>
-                  <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: 'wrap' }}>
+                <div className="schedule-field">
+                  <label className="schedule-label">Days</label>
+                  <div className="schedule-days">
                     {WEEK_DAYS.map((day) => (
-                      <Button
+                      <button
                         type="button"
                         key={`${idx}-${day}`}
                         onClick={() => toggleDay(idx, day)}
-                        size="small"
-                        variant={group.days.includes(day) ? 'contained' : 'outlined'}
-                        sx={{
-                          minWidth: 52,
-                          mb: 1,
-                          ...(group.days.includes(day)
-                            ? { background: 'var(--primary)', ':hover': { background: 'var(--primary-dark)' } }
-                            : {})
-                        }}
+                        className={`schedule-day-btn${group.days.includes(day) ? ' active' : ''}`}
                       >
                         {day.slice(0, 3)}
-                      </Button>
+                      </button>
                     ))}
-                  </Stack>
+                  </div>
+                </div>
 
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                    <TextField
-                      type="time"
-                      label="Morning In"
-                      value={group.morningIn}
-                      onChange={(e) => updateGroup(idx, { morningIn: e.target.value })}
-                      size="small"
-                      InputLabelProps={{ shrink: true }}
-                      fullWidth
-                    />
-                    <TextField
-                      type="time"
-                      label="Morning Out"
-                      value={group.morningOut}
-                      onChange={(e) => updateGroup(idx, { morningOut: e.target.value })}
-                      size="small"
-                      InputLabelProps={{ shrink: true }}
-                      fullWidth
-                    />
-                  </Stack>
+                <div className="schedule-section">
+                  <h4 className="schedule-section-title">Morning Shift</h4>
+                  <div className="schedule-row">
+                    <div className="schedule-field schedule-field-half">
+                      <label className="schedule-label">Time In</label>
+                      <input
+                        type="time"
+                        value={group.morningIn}
+                        onChange={(e) => updateGroup(idx, { morningIn: e.target.value })}
+                        className="schedule-input"
+                      />
+                    </div>
+                    <div className="schedule-field schedule-field-half">
+                      <label className="schedule-label">Time Out</label>
+                      <input
+                        type="time"
+                        value={group.morningOut}
+                        onChange={(e) => updateGroup(idx, { morningOut: e.target.value })}
+                        className="schedule-input"
+                      />
+                    </div>
+                  </div>
+                </div>
 
-                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
-                    <TextField
-                      type="time"
-                      label="Afternoon In"
-                      value={group.afternoonIn}
-                      onChange={(e) => updateGroup(idx, { afternoonIn: e.target.value })}
-                      size="small"
-                      InputLabelProps={{ shrink: true }}
-                      fullWidth
-                    />
-                    <TextField
-                      type="time"
-                      label="Afternoon Out"
-                      value={group.afternoonOut}
-                      onChange={(e) => updateGroup(idx, { afternoonOut: e.target.value })}
-                      size="small"
-                      InputLabelProps={{ shrink: true }}
-                      fullWidth
-                    />
-                  </Stack>
-                </Box>
-              ))}
+                <div className="schedule-section">
+                  <h4 className="schedule-section-title">Afternoon Shift</h4>
+                  <div className="schedule-row">
+                    <div className="schedule-field schedule-field-half">
+                      <label className="schedule-label">Time In</label>
+                      <input
+                        type="time"
+                        value={group.afternoonIn}
+                        onChange={(e) => updateGroup(idx, { afternoonIn: e.target.value })}
+                        className="schedule-input"
+                      />
+                    </div>
+                    <div className="schedule-field schedule-field-half">
+                      <label className="schedule-label">Time Out</label>
+                      <input
+                        type="time"
+                        value={group.afternoonOut}
+                        onChange={(e) => updateGroup(idx, { afternoonOut: e.target.value })}
+                        className="schedule-input"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
 
-              <Button type="button" variant="outlined" onClick={addGroup}>
-                + Add Day/Time Pattern
-              </Button>
-            </Stack>
-          </Box>
+            <button type="button" className="schedule-secondary-btn" onClick={addGroup}>
+              + Add Day/Time Pattern
+            </button>
+          </form>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setShowForm(false)}>Cancel</Button>
@@ -446,32 +364,32 @@ export default function ScheduleDetailsPage() {
       </Dialog>
 
       <Dialog
-        open={!!selectedPeriodId}
-        onClose={() => setSelectedPeriodId(null)}
+        open={!!selectedPeriod}
+        onClose={() => setSelectedPeriod(null)}
         maxWidth="sm"
         fullWidth
         PaperProps={{ className: 'schedule-dialog' }}
       >
         <DialogTitle sx={{ color: 'var(--text)', fontWeight: 700 }}>Schedule Details</DialogTitle>
         <DialogContent dividers sx={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}>
-          {selectedPeriodData && (
+          {selectedPeriod && (
             <div className="schedule-details-grid">
-              <div><strong>Name:</strong> {selectedPeriodData.PeriodName}</div>
-              <div><strong>Days:</strong> {formatDayList(selectedPeriodData.DayList, selectedPeriodData.DayNameList)}</div>
-              <div><strong>Morning:</strong> {formatSqlTime(selectedPeriodData.MorningTimeIn)} - {formatSqlTime(selectedPeriodData.MorningTimeOut)}</div>
-              <div><strong>Afternoon:</strong> {formatSqlTime(selectedPeriodData.AfternoonTimeIn)} - {formatSqlTime(selectedPeriodData.AfternoonTimeOut)}</div>
-              <div><strong>Grace Period:</strong> {selectedPeriodData.GracePeriodMinutes ?? 5} minutes</div>
-              {Array.isArray(selectedPeriodData.PatternDetails) && selectedPeriodData.PatternDetails.length > 0 && (
+              <div><strong>Name:</strong> {selectedPeriod.PeriodName}</div>
+              <div><strong>Days:</strong> {formatDayList(selectedPeriod.DayList, selectedPeriod.DayNameList)}</div>
+              <div><strong>Morning:</strong> {formatSqlTime(selectedPeriod.MorningTimeIn)} - {formatSqlTime(selectedPeriod.MorningTimeOut)}</div>
+              <div><strong>Afternoon:</strong> {formatSqlTime(selectedPeriod.AfternoonTimeIn)} - {formatSqlTime(selectedPeriod.AfternoonTimeOut)}</div>
+              <div><strong>Grace Period:</strong> {selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
+              {Array.isArray(selectedPeriod.PatternDetails) && selectedPeriod.PatternDetails.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <strong style={{ color: 'var(--text)' }}>Patterns:</strong>
                   <div className="schedule-pattern-grid">
-                    {selectedPeriodData.PatternDetails.map((p, idx) => (
+                    {selectedPeriod.PatternDetails.map((p, idx) => (
                       <div key={idx} className="schedule-pattern-card">
                         <div className="schedule-pattern-title">{p.PatternName || `Pattern ${idx + 1}`}</div>
                         <div className="schedule-pattern-subtle">Days: {p.DayNameList || formatDayList(p.DayList, '')}</div>
                         <div>Morning: {formatSqlTime(p.MorningTimeIn)} - {formatSqlTime(p.MorningTimeOut)}</div>
                         <div>Afternoon: {formatSqlTime(p.AfternoonTimeIn)} - {formatSqlTime(p.AfternoonTimeOut)}</div>
-                        <div className="schedule-pattern-subtle">Grace: {p.GracePeriodMinutes ?? selectedPeriodData.GracePeriodMinutes ?? 5} minutes</div>
+                        <div className="schedule-pattern-subtle">Grace: {p.GracePeriodMinutes ?? selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
                       </div>
                     ))}
                   </div>
@@ -482,7 +400,7 @@ export default function ScheduleDetailsPage() {
         </DialogContent>
         <DialogActions sx={{ background: 'var(--card)', borderTop: '1px solid var(--border)' }}>
           <Button
-            onClick={() => setSelectedPeriodId(null)}
+            onClick={() => setSelectedPeriod(null)}
             variant="contained"
             sx={{
               background: 'var(--primary)',

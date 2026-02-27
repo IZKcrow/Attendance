@@ -18,13 +18,7 @@ import {
   TablePagination,
   IconButton,
   Stack,
-  Tooltip,
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions
+  Tooltip
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
@@ -34,13 +28,6 @@ import EmployeeDialog from './EmployeeDialog'
 import * as api from '../api/employees'
 
 function EmployeeRow({ e, onEdit, onDelete }) {
-  const initials = String(e?.name || '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(n => n[0])
-    .slice(0, 2)
-    .join('')
-
   return (
     <TableRow
       hover
@@ -50,7 +37,7 @@ function EmployeeRow({ e, onEdit, onDelete }) {
     >
       <TableCell sx={{ color: 'var(--text)' }}>
         <Stack direction="row" spacing={2} alignItems="center">
-          <Avatar sx={{ bgcolor: 'var(--primary)' }}>{initials || '?'}</Avatar>
+          <Avatar sx={{ bgcolor: 'var(--primary)' }}>{e.name.split(' ').map(n => n[0]).slice(0,2).join('')}</Avatar>
           <Box>
             <div style={{ fontWeight: 600, color: 'var(--text)' }}>{e.name}</div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{e.email}</div>
@@ -87,7 +74,6 @@ export default function EmployeeTable() {
   const [error, setError] = React.useState(null)
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editing, setEditing] = React.useState(null)
-  const [deleteTarget, setDeleteTarget] = React.useState(null)
 
   const departments = React.useMemo(() => [
     'All',
@@ -111,27 +97,16 @@ export default function EmployeeTable() {
     return () => { mounted = false }
   }, [])
 
-  const filtered = React.useMemo(() => {
+  const filtered = employees.filter(e => {
     const q = query.trim().toLowerCase()
-    return employees.filter(e => {
-      const name = String(e?.name || '').toLowerCase()
-      const position = String(e?.position || '').toLowerCase()
-      const shift = String(e?.assignedShift || '').toLowerCase()
-      const email = String(e?.email || '').toLowerCase()
-      const phone = String(e?.phone || '').toLowerCase()
-      const dept = String(e?.department || '').toLowerCase()
-      const matchesQuery =
-        !q ||
-        name.includes(q) ||
-        position.includes(q) ||
-        shift.includes(q) ||
-        email.includes(q) ||
-        phone.includes(q) ||
-        dept.includes(q)
-      const matchesDept = department === 'All' || e.department === department
-      return matchesQuery && matchesDept
-    })
-  }, [employees, query, department])
+    const matchesQuery =
+      !q ||
+      e.name.toLowerCase().includes(q) ||
+      e.position.toLowerCase().includes(q) ||
+      (e.assignedShift || '').toLowerCase().includes(q)
+    const matchesDept = department === 'All' || e.department === department
+    return matchesQuery && matchesDept
+  })
 
   const handleChangePage = (_, newPage) => setPage(newPage)
   const handleChangeRowsPerPage = (e) => {
@@ -158,15 +133,10 @@ export default function EmployeeTable() {
   }
 
   const handleDelete = async (id) => {
+    if (!confirm('Delete this employee?')) return
     try {
       await api.deleteEmployee(id)
-      setEmployees(prev => {
-        const updated = prev.filter(p => p.id !== id)
-        const nextMaxPage = Math.max(0, Math.ceil(updated.length / rowsPerPage) - 1)
-        setPage(prevPage => Math.min(prevPage, nextMaxPage))
-        return updated
-      })
-      setDeleteTarget(null)
+      setEmployees(prev => prev.filter(p => p.id !== id))
     } catch (err) {
       setError(err.message)
     }
@@ -178,7 +148,7 @@ export default function EmployeeTable() {
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           <TextField
             size="small"
-            placeholder="Search name, position, shift, email, phone, department"
+            placeholder="Search by name or position"
             value={query}
             onChange={(e) => { setQuery(e.target.value); setPage(0) }}
             InputProps={{
@@ -238,7 +208,7 @@ export default function EmployeeTable() {
               </TableRow>
             )}
             {!loading && filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map(e => (
-              <EmployeeRow key={e.id} e={e} onEdit={openEdit} onDelete={setDeleteTarget} />
+              <EmployeeRow key={e.id} e={e} onEdit={openEdit} onDelete={handleDelete} />
             ))}
             {!loading && filtered.length === 0 && (
               <TableRow>
@@ -264,28 +234,6 @@ export default function EmployeeTable() {
         onSave={handleSave}
         initial={editing}
       />
-
-      <Dialog
-        open={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-      >
-        <DialogTitle>Delete Employee</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Are you sure you want to delete this employee?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
-          <Button
-            color="error"
-            variant="contained"
-            onClick={() => deleteTarget && handleDelete(deleteTarget)}
-          >
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
     </>
   )
 }

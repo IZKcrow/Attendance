@@ -13,23 +13,9 @@ import {
   TextField,
   Button,
   Paper,
-  Chip,
-  Snackbar,
-  Alert,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions
+  Chip
 } from '@mui/material'
 import * as api from '../api'
-
-function toLocalDateInputValue(d = new Date()) {
-  const x = new Date(d)
-  const year = x.getFullYear()
-  const month = String(x.getMonth() + 1).padStart(2, '0')
-  const day = String(x.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
 
 export default function Scheduler() {
   const [employees, setEmployees] = useState([])
@@ -37,12 +23,10 @@ export default function Scheduler() {
   const [selectedShiftID, setSelectedShiftID] = useState('')
   const [selectedEmployeeIDs, setSelectedEmployeeIDs] = useState([])
   const [assignAll, setAssignAll] = useState(false)
-  const [effectiveFrom, setEffectiveFrom] = useState(() => toLocalDateInputValue(new Date()))
+  const [effectiveFrom, setEffectiveFrom] = useState(() => new Date().toISOString().split('T')[0])
   const [effectiveTo, setEffectiveTo] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [snack, setSnack] = useState({ open: false, message: '', severity: 'info' })
-  const [reassignDialog, setReassignDialog] = useState({ open: false, rows: [], payload: null })
 
   useEffect(() => {
     let mounted = true
@@ -87,58 +71,26 @@ export default function Scheduler() {
     return shift?.DayList || '-'
   }
 
-  const dateRangeError = effectiveTo && effectiveFrom && effectiveTo < effectiveFrom
-    ? 'Effective To must be on or after Effective From.'
-    : ''
-  const canSubmit = selectedShiftID && (assignAll || selectedEmployeeIDs.length > 0) && !dateRangeError
-
-  const showSnack = (message, severity = 'info') => {
-    setSnack({ open: true, message, severity })
-  }
-
-  const performAssign = async (payload) => {
-    setSaving(true)
-    try {
-      await api.assignShiftToEmployees(payload)
-      showSnack('Shift assignment saved successfully.', 'success')
-      if (!payload.assignAll) setSelectedEmployeeIDs([])
-    } catch (err) {
-      showSnack('Assignment failed: ' + (err.message || err), 'error')
-    } finally {
-      setSaving(false)
-    }
-  }
+  const canSubmit = selectedShiftID && (assignAll || selectedEmployeeIDs.length > 0)
 
   const handleAssign = async () => {
     if (!canSubmit) return
-    const payload = {
-      shiftID: selectedShiftID,
-      employeeIDs: assignAll ? [] : selectedEmployeeIDs,
-      assignAll,
-      effectiveFrom: effectiveFrom || null,
-      effectiveTo: effectiveTo || null
-    }
-
-    const targetEmployees = assignAll
-      ? employees
-      : employees.filter((emp) => selectedEmployeeIDs.includes(emp.id))
-    const nextShiftName = (selectedShift?.ShiftName || '').trim().toLowerCase()
-    const alreadyAssigned = targetEmployees.filter((emp) => {
-      const current = String(emp?.assignedShift || '').trim()
-      if (!current) return false
-      return current.toLowerCase() !== nextShiftName
-    })
-
-    if (alreadyAssigned.length > 0) {
-      setReassignDialog({
-        open: true,
-        rows: alreadyAssigned,
-        payload
+    setSaving(true)
+    try {
+      await api.assignShiftToEmployees({
+        shiftID: selectedShiftID,
+        employeeIDs: selectedEmployeeIDs,
+        assignAll,
+        effectiveFrom: effectiveFrom || null,
+        effectiveTo: effectiveTo || null
       })
-      return
+      alert('Shift assignment saved successfully.')
+      if (!assignAll) setSelectedEmployeeIDs([])
+    } catch (err) {
+      alert('Assignment failed: ' + (err.message || err))
+    } finally {
+      setSaving(false)
     }
-
-    await performAssign(payload)
   }
 
   if (loading) return <div>Loading scheduler...</div>
@@ -238,8 +190,6 @@ export default function Scheduler() {
             label="Effective To (optional)"
             value={effectiveTo}
             onChange={(e) => setEffectiveTo(e.target.value)}
-            error={Boolean(dateRangeError)}
-            helperText={dateRangeError || ' '}
             InputLabelProps={{ shrink: true }}
           />
         </Grid>
@@ -252,21 +202,10 @@ export default function Scheduler() {
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
             <Chip label={`Name: ${selectedShift.ShiftName}`} />
+            <Chip label={`AM: ${fmtTime(selectedShift.MorningTimeIn)} - ${fmtTime(selectedShift.MorningTimeOut)}`} />
+            <Chip label={`PM: ${fmtTime(selectedShift.AfternoonTimeIn)} - ${fmtTime(selectedShift.AfternoonTimeOut)}`} />
             <Chip label={`Grace: ${selectedShift.GracePeriodMinutes || 0} min`} />
-            {Array.isArray(selectedShift.PatternDetails) && selectedShift.PatternDetails.length > 0 ? (
-              selectedShift.PatternDetails.map((p, idx) => (
-                <Chip
-                  key={`${selectedShift.ShiftID}-pattern-${idx}`}
-                  label={`${p.PatternName || `Pattern ${idx + 1}`}: ${p.DayNameList || fmtDays(selectedShift)} | AM ${fmtTime(p.MorningTimeIn)}-${fmtTime(p.MorningTimeOut)} | PM ${fmtTime(p.AfternoonTimeIn)}-${fmtTime(p.AfternoonTimeOut)}`}
-                />
-              ))
-            ) : (
-              <>
-                <Chip label={`AM: ${fmtTime(selectedShift.MorningTimeIn)} - ${fmtTime(selectedShift.MorningTimeOut)}`} />
-                <Chip label={`PM: ${fmtTime(selectedShift.AfternoonTimeIn)} - ${fmtTime(selectedShift.AfternoonTimeOut)}`} />
-                <Chip label={`Days: ${fmtDays(selectedShift)}`} />
-              </>
-            )}
+            <Chip label={`Days: ${fmtDays(selectedShift)}`} />
           </Box>
         </Paper>
       )}
@@ -281,59 +220,6 @@ export default function Scheduler() {
           {saving ? 'Assigning...' : 'Assign Shift'}
         </Button>
       </Box>
-
-      <Snackbar
-        open={snack.open}
-        autoHideDuration={4000}
-        onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-      >
-        <Alert
-          onClose={() => setSnack((prev) => ({ ...prev, open: false }))}
-          severity={snack.severity}
-          variant="filled"
-          sx={{ width: '100%' }}
-        >
-          {snack.message}
-        </Alert>
-      </Snackbar>
-
-      <Dialog
-        open={reassignDialog.open}
-        onClose={() => setReassignDialog({ open: false, rows: [], payload: null })}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Existing Shift Assignment Detected</DialogTitle>
-        <DialogContent dividers>
-          <Typography variant="body2" sx={{ mb: 1.2 }}>
-            The following employee(s) already have a shift assigned. Continue to replace their assignment with this shift?
-          </Typography>
-          <Box sx={{ display: 'grid', gap: 0.8, maxHeight: 260, overflowY: 'auto' }}>
-            {reassignDialog.rows.map((emp) => (
-              <Typography key={emp.id} variant="body2">
-                {emp.EmployeeCode || '-'} - {emp.name || 'Employee'} (Current: {emp.assignedShift})
-              </Typography>
-            ))}
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setReassignDialog({ open: false, rows: [], payload: null })}>
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            onClick={async () => {
-              const payload = reassignDialog.payload
-              setReassignDialog({ open: false, rows: [], payload: null })
-              if (payload) await performAssign(payload)
-            }}
-            sx={{ background: 'var(--primary)', ':hover': { background: 'var(--primary-dark)' } }}
-          >
-            Continue
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   )
 }

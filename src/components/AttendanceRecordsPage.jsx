@@ -12,8 +12,6 @@ import {
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
-import { getRangeDate, toDateInputValue } from '../utils/dateRange'
-import useAppSnackbar from '../hooks/useAppSnackbar'
 
 function fmtDate(value) {
   if (!value) return '-'
@@ -29,6 +27,12 @@ function fmtTime(value) {
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return String(value)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function toDateInputValue(d) {
+  const x = new Date(d)
+  x.setMinutes(x.getMinutes() - x.getTimezoneOffset())
+  return x.toISOString().slice(0, 10)
 }
 
 const primaryBtnSx = {
@@ -89,7 +93,6 @@ function getFriendlyAttendanceError(err, mode = 'attendance') {
 }
 
 export default function AttendanceRecordsPage() {
-  const { show, SnackbarComponent } = useAppSnackbar()
   const [records, setRecords] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
@@ -99,142 +102,91 @@ export default function AttendanceRecordsPage() {
   const [weekAnchor, setWeekAnchor] = React.useState(toDateInputValue(new Date()))
   const [monthAnchor, setMonthAnchor] = React.useState(toDateInputValue(new Date()))
   const [yearAnchor, setYearAnchor] = React.useState(new Date().getFullYear().toString())
-  const [employees, setEmployees] = React.useState([])
-  const [devices, setDevices] = React.useState([])
-  const [employeesLoading, setEmployeesLoading] = React.useState(true)
-  const [devicesLoading, setDevicesLoading] = React.useState(true)
-  const requestSeqRef = React.useRef(0)
 
-  const rangeParams = React.useMemo(() => {
-    switch (range) {
-      case 'today':
-        return { type: 'today' }
-      case 'week':
-        return { type: 'week', anchor: weekAnchor }
-      case 'month':
-        return { type: 'month', anchor: monthAnchor }
-      case 'year':
-        return { type: 'year', anchor: yearAnchor }
-      case 'custom':
-        return { type: 'custom', from, to }
+  React.useEffect(() => {
+    loadRecords()
+  }, [range, from, to, weekAnchor, monthAnchor, yearAnchor])
+
+  const getRangeDate = (kind, anchorDateStr = null) => {
+    const now = anchorDateStr ? new Date(anchorDateStr) : new Date()
+    switch (kind) {
+      case 'week': {
+        const day = now.getDay() === 0 ? 7 : now.getDay()
+        const monday = new Date(now.getTime() - (day - 1) * 86400000)
+        const sunday = new Date(monday.getTime() + 6 * 86400000)
+        return { from: toDateInputValue(monday), to: toDateInputValue(sunday) }
+      }
+      case 'month': {
+        const from = new Date(now.getFullYear(), now.getMonth(), 1)
+        const to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+        return { from: toDateInputValue(from), to: toDateInputValue(to) }
+      }
+      case 'year': {
+        const from = new Date(now.getFullYear(), 0, 1)
+        const to = new Date(now.getFullYear(), 11, 31)
+        return { from: toDateInputValue(from), to: toDateInputValue(to) }
+      }
       default:
-        return { type: 'today' }
+        return { from: toDateInputValue(now), to: toDateInputValue(now) }
     }
-  }, [range, weekAnchor, monthAnchor, yearAnchor, from, to])
+  }
 
-  React.useEffect(() => {
-    loadRecords(rangeParams)
-  }, [rangeParams])
-
-  React.useEffect(() => {
-    let mounted = true
-    setEmployeesLoading(true)
-    setDevicesLoading(true)
-
-    api.fetchEmployees()
-      .then((data) => {
-        if (!mounted) return
-        setEmployees(Array.isArray(data) ? data : [])
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (mounted) setEmployeesLoading(false)
-      })
-
-    api.fetchDevices()
-      .then((data) => {
-        if (!mounted) return
-        setDevices(Array.isArray(data) ? data : [])
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (mounted) setDevicesLoading(false)
-      })
-
-    return () => { mounted = false }
-  }, [])
-
-  const loadRecords = async (params = rangeParams) => {
-    const reqSeq = ++requestSeqRef.current
+  const loadRecords = async () => {
     try {
       setLoading(true)
       let data = []
-      switch (params.type) {
+      switch (range) {
         case 'today':
           data = await api.fetchAttendanceToday()
           break
         case 'week': {
-          const r = getRangeDate('week', params.anchor)
+          const r = getRangeDate('week', weekAnchor)
           data = await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'month': {
-          const r = getRangeDate('month', params.anchor)
+          const r = getRangeDate('month', monthAnchor)
           data = await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'year': {
-          const r = getRangeDate('year', `${params.anchor}-01-01`)
+          const r = getRangeDate('year', `${yearAnchor}-01-01`)
           data = await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'custom':
-          data = await api.fetchAttendanceByRange(params.from, params.to)
+          data = await api.fetchAttendanceByRange(from, to)
           break
         default:
           data = await api.fetchAttendanceToday()
       }
       const arr = Array.isArray(data) ? data : []
-      const normalized = arr.map((rec) => {
-        const hasAnyLog =
-          rec.MorningTimeIn ||
-          rec.MorningTimeOut ||
-          rec.AfternoonTimeIn ||
-          rec.AfternoonTimeOut
-
-        return {
-          ...rec,
-          ShiftName:
-            rec.ShiftName ||
-            rec.RequiredShiftName ||
-            rec.ScheduleName ||
-            rec.PeriodName ||
-            '-',
-          AttendanceSummary:
-            rec.AttendanceSummary ||
-            rec.Status ||
-            (hasAnyLog ? 'On-Site' : 'Absent')
-        }
-      })
-      if (reqSeq !== requestSeqRef.current) return
+      const normalized = arr.map((rec) => ({
+        ...rec,
+        ShiftName:
+          rec.ShiftName ||
+          rec.RequiredShiftName ||
+          rec.ScheduleName ||
+          rec.PeriodName ||
+          '-',
+        AttendanceSummary:
+          rec.AttendanceSummary ||
+          rec.Status ||
+          (rec.MorningTimeIn || rec.AfternoonTimeIn ? 'On-Site' : 'Absent')
+      }))
       setRecords(normalized)
       setError(null)
     } catch (err) {
-      if (reqSeq !== requestSeqRef.current) return
       setError(err.message)
     } finally {
-      if (reqSeq !== requestSeqRef.current) return
       setLoading(false)
     }
   }
 
   return (
     <>
-      {SnackbarComponent}
-      <FaceScanForm
-        employees={employees}
-        devices={devices}
-        employeesLoading={employeesLoading}
-        devicesLoading={devicesLoading}
-        onScanned={loadRecords}
-        show={show}
-      />
-      <ClockInForm
-        employees={employees}
-        employeesLoading={employeesLoading}
-        onClockIn={loadRecords}
-        show={show}
-      />
+      <FaceScanForm onScanned={loadRecords} />
+      <ClockInForm onClockIn={loadRecords} />
 
       <GenericDataTable
         title="Attendance"
@@ -273,47 +225,43 @@ export default function AttendanceRecordsPage() {
   )
 }
 
-function FaceScanForm({
-  employees,
-  devices,
-  employeesLoading,
-  devicesLoading,
-  onScanned,
-  show
-}) {
+function FaceScanForm({ onScanned }) {
+  const [employees, setEmployees] = React.useState([])
   const [selectedCode, setSelectedCode] = React.useState('')
-  const [deviceCode, setDeviceCode] = React.useState('')
+  const [deviceCode, setDeviceCode] = React.useState('KIOSK-001')
+  const [devices, setDevices] = React.useState([])
   const [scanning, setScanning] = React.useState(false)
 
   React.useEffect(() => {
-    if (!Array.isArray(devices) || !devices.length) return
-    setDeviceCode((prev) => {
-      if (prev && devices.some((d) => d.DeviceCode === prev)) return prev
-      const defaultDevice =
-        devices.find((d) => d.DeviceCode === 'KIOSK-001') ||
-        devices[0]
-      return defaultDevice?.DeviceCode || ''
-    })
-  }, [devices])
+    let mounted = true
+    api.fetchEmployees().then(data => { if (mounted) setEmployees(Array.isArray(data) ? data : []) }).catch(() => {})
+    api.fetchDevices().then(data => {
+      if (!mounted) return
+      const list = Array.isArray(data) ? data : []
+      setDevices(list)
+      if (list.length > 0 && !selectedCode) {
+        // keep existing deviceCode if set, otherwise default to first device
+        setDeviceCode(prev => prev || list[0].DeviceCode || 'KIOSK-001')
+      }
+    }).catch(() => {})
+    return () => { mounted = false }
+  }, [])
 
   const doFaceScan = async () => {
-    if (!selectedCode) {
-      show('Select an employee for face scan.', 'warning')
-      return
-    }
+    if (!selectedCode) return alert('Select an employee for prototype face scan.')
     setScanning(true)
     try {
       const result = await api.faceScanAttendance({
         employeeCode: selectedCode,
-        deviceCode: deviceCode || null,
+        deviceCode,
         matchScore: 99.0,
         actor: 'FACE_SCANNER_UI'
       })
       onScanned && onScanned()
       setSelectedCode('')
-      show(`Face scan success: ${result.employeeName || result.employeeCode} -> ${result.logType} at ${result.time}`, 'success')
+      alert(`Face scan success: ${result.employeeName || result.employeeCode} -> ${result.logType} at ${result.time}`)
     } catch (err) {
-      show(getFriendlyAttendanceError(err, 'face'), 'error')
+      alert(getFriendlyAttendanceError(err, 'face'))
     } finally {
       setScanning(false)
     }
@@ -329,10 +277,8 @@ function FaceScanForm({
           value={selectedCode}
           onChange={(e) => setSelectedCode(e.target.value)}
         >
-          <MenuItem value="">
-            <em>{employeesLoading ? 'Loading employees...' : 'Face scan: select employee'}</em>
-          </MenuItem>
-          {employees.map((emp) => (
+          <MenuItem value=""><em>Face scan: select employee</em></MenuItem>
+          {employees.map(emp => (
             <MenuItem key={emp.id || emp.EmployeeID} value={emp.EmployeeCode}>
               {emp.EmployeeCode} - {emp.name || `${emp.FirstName || ''} ${emp.LastName || ''}`}
             </MenuItem>
@@ -348,14 +294,13 @@ function FaceScanForm({
           value={deviceCode}
           onChange={(e) => setDeviceCode(e.target.value)}
         >
-          <MenuItem value="">
-            <em>{devicesLoading ? 'Loading devices...' : 'Select device'}</em>
-          </MenuItem>
-          {devices.map((dev) => (
+          <MenuItem value=""><em>Select device</em></MenuItem>
+          {devices.map(dev => (
             <MenuItem key={dev.DeviceID || dev.DeviceCode} value={dev.DeviceCode}>
               {dev.DeviceCode} {dev.DeviceName ? `- ${dev.DeviceName}` : ''}
             </MenuItem>
           ))}
+          <MenuItem value="KIOSK-001">KIOSK-001 (default)</MenuItem>
         </Select>
       </FormControl>
 
@@ -374,24 +319,28 @@ function FaceScanForm({
   )
 }
 
-function ClockInForm({ employees, employeesLoading, onClockIn, show }) {
+function ClockInForm({ onClockIn }) {
+  const [employees, setEmployees] = React.useState([])
   const [selectedCode, setSelectedCode] = React.useState('')
   const [logType, setLogType] = React.useState('MORNING_IN')
   const [submitting, setSubmitting] = React.useState(false)
 
+  React.useEffect(() => {
+    let mounted = true
+    api.fetchEmployees().then(data => { if (mounted) setEmployees(Array.isArray(data) ? data : []) }).catch(() => {})
+    return () => { mounted = false }
+  }, [])
+
   const doClockIn = async () => {
-    if (!selectedCode) {
-      show('Select an employee.', 'warning')
-      return
-    }
+    if (!selectedCode) return alert('Select an employee')
     setSubmitting(true)
     try {
       await api.recordAttendance(selectedCode, logType)
       onClockIn && onClockIn()
       setSelectedCode('')
-      show('Attendance log recorded', 'success')
+      alert('Attendance log recorded')
     } catch (err) {
-      show(getFriendlyAttendanceError(err, 'attendance'), 'error')
+      alert(getFriendlyAttendanceError(err, 'attendance'))
     } finally {
       setSubmitting(false)
     }
@@ -407,10 +356,8 @@ function ClockInForm({ employees, employeesLoading, onClockIn, show }) {
           value={selectedCode}
           onChange={(e) => setSelectedCode(e.target.value)}
         >
-          <MenuItem value="">
-            <em>{employeesLoading ? 'Loading employees...' : 'Select employee'}</em>
-          </MenuItem>
-          {employees.map((emp) => (
+          <MenuItem value=""><em>Select employee</em></MenuItem>
+          {employees.map(emp => (
             <MenuItem key={emp.id || emp.EmployeeID} value={emp.EmployeeCode}>
               {emp.EmployeeCode} - {emp.name || `${emp.FirstName || ''} ${emp.LastName || ''}`}
             </MenuItem>

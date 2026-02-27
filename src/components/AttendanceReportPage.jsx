@@ -12,8 +12,6 @@ import {
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
-import { getRangeDate, toDateInputValue } from '../utils/dateRange'
-import useAppSnackbar from '../hooks/useAppSnackbar'
 
 function fmtDate(value) {
   if (!value) return '-'
@@ -29,6 +27,12 @@ function fmtTime(value) {
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return String(value)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function toDateInputValue(d) {
+  const x = new Date(d)
+  x.setMinutes(x.getMinutes() - x.getTimezoneOffset())
+  return x.toISOString().slice(0, 10)
 }
 
 function toTimeInputValue(value) {
@@ -61,6 +65,30 @@ function computeDutyHours(row) {
   return total > 0 ? (total / 60).toFixed(2) : '0.00'
 }
 
+function getRangeDate(kind, anchorDateStr = null) {
+  const now = anchorDateStr ? new Date(anchorDateStr) : new Date()
+  switch (kind) {
+    case 'week': {
+      const day = now.getDay() === 0 ? 7 : now.getDay()
+      const monday = new Date(now.getTime() - (day - 1) * 24 * 60 * 60 * 1000)
+      const sunday = new Date(monday.getTime() + 6 * 24 * 60 * 60 * 1000)
+      return { from: toDateInputValue(monday), to: toDateInputValue(sunday) }
+    }
+    case 'month': {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1)
+      const to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+      return { from: toDateInputValue(from), to: toDateInputValue(to) }
+    }
+    case 'year': {
+      const from = new Date(now.getFullYear(), 0, 1)
+      const to = new Date(now.getFullYear(), 11, 31)
+      return { from: toDateInputValue(from), to: toDateInputValue(to) }
+    }
+    default:
+      return { from: toDateInputValue(now), to: toDateInputValue(now) }
+  }
+}
+
 const editCardSx = {
   p: 2,
   mb: 2,
@@ -80,7 +108,6 @@ const saveBtnSx = {
 }
 
 export default function AttendanceReportPage() {
-  const { show, SnackbarComponent } = useAppSnackbar()
   const [records, setRecords] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
@@ -93,51 +120,36 @@ export default function AttendanceReportPage() {
   const [statusFilter, setStatusFilter] = React.useState('all')
   const [editRow, setEditRow] = React.useState(null)
   const [saving, setSaving] = React.useState(false)
-  const requestSeqRef = React.useRef(0)
 
-  const rangeParams = React.useMemo(() => {
-    switch (range) {
-      case 'today':
-        return { type: 'today' }
-      case 'week':
-        return { type: 'week', anchor: weekAnchor }
-      case 'month':
-        return { type: 'month', anchor: monthAnchor }
-      case 'year':
-        return { type: 'year', anchor: yearAnchor }
-      case 'custom':
-        return { type: 'custom', from, to }
-      default:
-        return { type: 'today' }
-    }
-  }, [range, weekAnchor, monthAnchor, yearAnchor, from, to])
+  React.useEffect(() => {
+    loadRecords()
+  }, [range, from, to, weekAnchor, monthAnchor, yearAnchor])
 
-  const loadRecords = async (params = rangeParams) => {
-    const reqSeq = ++requestSeqRef.current
+  const loadRecords = async () => {
     try {
       setLoading(true)
       let data = []
-      switch (params.type) {
+      switch (range) {
         case 'today':
           data = await api.fetchAttendanceToday()
           break
         case 'week': {
-          const r = getRangeDate('week', params.anchor)
+          const r = getRangeDate('week', weekAnchor)
           data = await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'month': {
-          const r = getRangeDate('month', params.anchor)
+          const r = getRangeDate('month', monthAnchor)
           data = await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'year': {
-          const r = getRangeDate('year', `${params.anchor}-01-01`)
+          const r = getRangeDate('year', `${yearAnchor}-01-01`)
           data = await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'custom':
-          data = await api.fetchAttendanceByRange(params.from, params.to)
+          data = await api.fetchAttendanceByRange(from, to)
           break
         default:
           data = await api.fetchAttendanceToday()
@@ -178,21 +190,14 @@ export default function AttendanceReportPage() {
         if (!status && emptyTimes) status = 'Absent'
         return { ...rec, __ShiftResolved: shift, AttendanceSummary: status }
       })
-      if (reqSeq !== requestSeqRef.current) return
       setRecords(normalized)
       setError(null)
     } catch (err) {
-      if (reqSeq !== requestSeqRef.current) return
       setError(err.message)
     } finally {
-      if (reqSeq !== requestSeqRef.current) return
       setLoading(false)
     }
   }
-
-  React.useEffect(() => {
-    loadRecords(rangeParams)
-  }, [rangeParams])
 
   const openEdit = (row) => {
     if (!row) return
@@ -223,10 +228,10 @@ export default function AttendanceReportPage() {
         AfternoonTimeIn: clean(editRow.AfternoonTimeIn),
         AfternoonTimeOut: clean(editRow.AfternoonTimeOut)
       })
-      await loadRecords(rangeParams)
+      await loadRecords()
       setEditRow(null)
     } catch (err) {
-      show(`Update failed: ${err?.message || err}`, 'error')
+      alert('Update failed: ' + (err.message || err))
     } finally {
       setSaving(false)
     }
@@ -256,7 +261,6 @@ export default function AttendanceReportPage() {
 
   return (
     <div>
-      {SnackbarComponent}
       <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <label style={{ fontWeight: 700 }}>Range:</label>
         <select
