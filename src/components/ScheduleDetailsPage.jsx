@@ -138,6 +138,7 @@ export default function ScheduleDetailsPage() {
     if (!value) return 'Not set'
     if (typeof value === 'string') {
       if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value.slice(11, 16)
       const d = new Date(value)
       if (!Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       return value

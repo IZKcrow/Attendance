@@ -20,10 +20,9 @@ import ReportGmailerrorredOutlinedIcon from '@mui/icons-material/ReportGmailerro
 import ArrowDropUpOutlinedIcon from '@mui/icons-material/ArrowDropUpOutlined'
 import ArrowDropDownOutlinedIcon from '@mui/icons-material/ArrowDropDownOutlined'
 import RemoveOutlinedIcon from '@mui/icons-material/RemoveOutlined'
-import { Pie, Bar, Line } from 'react-chartjs-2'
+import { Bar, Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
-  ArcElement,
   Tooltip,
   Legend,
   CategoryScale,
@@ -34,7 +33,7 @@ import {
 } from 'chart.js'
 import * as api from '../api'
 
-ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement)
+ChartJS.register(Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement)
 
 const getCssVar = (name, fallback) => {
   if (typeof window === 'undefined') return fallback
@@ -73,7 +72,9 @@ function toDateStr(d) {
 function groupByDate(records) {
   const map = new Map()
   records.forEach(r => {
-    const day = toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt || new Date())
+    const day = r.NormalizedDate
+      ? r.NormalizedDate
+      : toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt || r.date || r.attendance_date || r.Date || new Date())
     if (!map.has(day)) map.set(day, [])
     map.get(day).push(r)
   })
@@ -99,7 +100,6 @@ export default function OverviewDashboard() {
   const [employees, setEmployees] = React.useState([])
   const [loadingOverview, setLoadingOverview] = React.useState(true)
   const [loadingDept, setLoadingDept] = React.useState(true)
-  const [loadingRecent, setLoadingRecent] = React.useState(true)
   const [now, setNow] = React.useState(new Date())
 
   React.useEffect(() => {
@@ -123,17 +123,26 @@ export default function OverviewDashboard() {
   const loadOverview = async () => {
     try {
       setLoadingOverview(true)
-      setLoadingRecent(true)
       const today = new Date()
       const from = toDateStr(new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000))
       const to = toDateStr(today)
       const attData = await api.fetchAttendanceByRange(from, to)
-      setOverviewRecords(Array.isArray(attData) ? attData : [])
+      const arr = Array.isArray(attData) ? attData : []
+      const normalized = arr.map(r => {
+        const rawDate =
+          r.AttendanceDate ??
+          r.AttendanceDay ??
+          r.CreatedAt ??
+          r.date ??
+          r.attendance_date ??
+          r.Date
+        return { ...r, NormalizedDate: toDateStr(rawDate || new Date()) }
+      })
+      setOverviewRecords(normalized)
     } catch (_) {
       setOverviewRecords([])
     } finally {
       setLoadingOverview(false)
-      setLoadingRecent(false)
     }
   }
 
@@ -149,20 +158,24 @@ export default function OverviewDashboard() {
     }
   }
 
-  const todayStr = React.useMemo(() => toDateStr(new Date()), [])
+  const todayStr = React.useMemo(() => toDateStr(now), [now])
   const yesterdayStr = React.useMemo(() => {
-    const d = new Date()
+    const d = new Date(now)
     d.setDate(d.getDate() - 1)
     return toDateStr(d)
-  }, [])
+  }, [now])
 
   const computeStats = React.useCallback(records => {
     const enriched = enrichToday(records)
-    const onTime = enriched.filter(r => r.flags.onTime).length
-    const late = enriched.filter(r => r.flags.late).length
-    const absent = enriched.filter(r => r.flags.absent).length
-    const earlyLeave = enriched.filter(r => r.flags.earlyLeave).length
-    const incomplete = enriched.filter(r => r.flags.incomplete).length
+    let onTime = 0, late = 0, absent = 0, earlyLeave = 0, incomplete = 0
+    for (const r of enriched) {
+      // Priority: absent > incomplete > late > earlyLeave > onTime
+      if (r.flags.absent) absent += 1
+      else if (r.flags.incomplete) incomplete += 1
+      else if (r.flags.late) late += 1
+      else if (r.flags.earlyLeave) earlyLeave += 1
+      else onTime += 1
+    }
     const totalLogs = enriched.length
     return { onTime, late, absent, earlyLeave, incomplete, totalLogs }
   }, [])
@@ -170,7 +183,7 @@ export default function OverviewDashboard() {
   // Stats (today / yesterday)
   const stats = React.useMemo(() => computeStats(todayRecords), [todayRecords, computeStats])
   const yesterdayRecords = React.useMemo(
-    () => overviewRecords.filter(r => toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt) === yesterdayStr),
+    () => overviewRecords.filter(r => (r.NormalizedDate || toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt || r.date || r.attendance_date || r.Date)) === yesterdayStr),
     [overviewRecords, yesterdayStr]
   )
   const yesterdayStats = React.useMemo(() => computeStats(yesterdayRecords), [yesterdayRecords, computeStats])
@@ -199,29 +212,7 @@ export default function OverviewDashboard() {
     incomplete: makeDelta(stats.incomplete, yesterdayStats.incomplete, 'down')
   }
 
-  // Pie for today
-  const pieData = {
-    labels: ['On Time', 'Late', 'Absent', 'Early Leave', 'Incomplete'],
-    datasets: [
-      {
-        data: [
-          stats.onTime || 0,
-          stats.late || 0,
-          stats.absent || 0,
-          stats.earlyLeave || 0,
-          stats.incomplete || 0
-        ],
-        backgroundColor: [
-          accent.primary,
-          '#d97706',
-          '#b91c1c',
-          accent.primaryDark,
-          accent.muted
-        ],
-        borderWidth: 0
-      }
-    ]
-  }
+  // Pie chart removed: categories are now mutually exclusive and pie code was unused.
 
   // Department Attendance today (percent of employees per dept that logged today)
   const deptAttendance = React.useMemo(() => {
@@ -279,6 +270,8 @@ export default function OverviewDashboard() {
     )
     return { labels, rates }
   }, [overviewRecords])
+
+  const recentLogs = React.useMemo(() => getRecentLogs(todayRecords), [todayRecords])
 
   return (
     <Box sx={{ display: 'grid', gap: 2 }}>
@@ -400,7 +393,7 @@ export default function OverviewDashboard() {
         <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1 }}>
           Recent Logs (Today)
         </Typography>
-        {loadingRecent ? (
+        {loadingDept ? (
           <Skeleton variant="rounded" height={200} />
         ) : (
           <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -412,7 +405,7 @@ export default function OverviewDashboard() {
               </Box>
             </Box>
             <Box component="tbody">
-              {getRecentLogs(todayRecords).map((row, idx) => (
+              {recentLogs.map((row, idx) => (
                 <Box component="tr" key={idx}>
                   <Box component="td" sx={{ padding: '8px', borderBottom: `1px solid ${accent.border}` }}>{row.EmployeeName || row.EmployeeCode || '-'}</Box>
                   <Box component="td" sx={{ padding: '8px', borderBottom: `1px solid ${accent.border}` }}>{row.AttendanceDate || '-'}</Box>
@@ -420,7 +413,7 @@ export default function OverviewDashboard() {
                   <Box component="td" sx={{ padding: '8px', borderBottom: `1px solid ${accent.border}` }}>{renderStatusChip(row.AttendanceSummary || row.Status || '-', accent)}</Box>
                 </Box>
               ))}
-              {getRecentLogs(todayRecords).length === 0 && (
+              {recentLogs.length === 0 && (
                 <Box component="tr">
                   <Box component="td" colSpan={4} sx={{ padding: '10px', textAlign: 'center' }}>No recent logs</Box>
                 </Box>
@@ -434,15 +427,18 @@ export default function OverviewDashboard() {
 }
 
 function StatCard({ title, value, accent: color = '#2563eb', icon = null, deltaText, deltaTone = 'neutral' }) {
+  // Resolve CSS variables at render-time for theme reactivity
+  const primary = getCssVar('--primary', '#009063')
+  const muted = getCssVar('--muted', '#6b7280')
   const toneMap = {
-    positive: { color: accent.primary || '#009063', bg: alpha(accent.primary || '#009063', 0.14), Icon: ArrowDropUpOutlinedIcon },
-    negative: { color: accent.danger || '#b91c1c', bg: alpha(accent.danger || '#b91c1c', 0.14), Icon: ArrowDropDownOutlinedIcon },
-    neutral: { color: accent.muted || '#6b7280', bg: alpha(accent.muted || '#6b7280', 0.16), Icon: RemoveOutlinedIcon }
+    positive: { color: primary, bg: alpha(primary, 0.14), Icon: ArrowDropUpOutlinedIcon },
+    negative: { color: '#b91c1c', bg: alpha('#b91c1c', 0.14), Icon: ArrowDropDownOutlinedIcon },
+    neutral: { color: muted, bg: alpha(muted, 0.16), Icon: RemoveOutlinedIcon }
   }
   const tone = toneMap[deltaTone] || toneMap.neutral
   const DeltaIcon = tone.Icon
   return (
-    <Paper sx={{ ...darkCard, p: 2, height: '100%' }}>
+    <Paper sx={{ p: 2, height: '100%', backgroundColor: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 3, boxShadow: '0 10px 24px rgba(0,0,0,0.2)' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
         <Typography variant="h4" sx={{ fontWeight: 800, color, lineHeight: 1.1 }}>{value}</Typography>
         {icon && (
@@ -465,7 +461,7 @@ function StatCard({ title, value, accent: color = '#2563eb', icon = null, deltaT
         sx={{
           textTransform: 'uppercase',
           letterSpacing: 0.6,
-          color: accent.muted,
+          color: getCssVar('--muted', '#6b7280'),
           display: 'block'
         }}
       >

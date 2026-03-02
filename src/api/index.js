@@ -402,3 +402,27 @@ export async function assignShiftToEmployees({
   })
 }
 
+export async function fetchEmployeeAssignments({ employeeIDs = [] }) {
+  const res = await fetch(`${BASE}/shift-assignments/list`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employeeIDs })
+  })
+  return handleRes(res)
+}
+
+export async function removeShiftAssignments({
+  shiftID,
+  employeeIDs = [],
+  effectiveTo = null,
+  mode = 'end' // 'end' to end-date, 'delete' to hard-remove if backend allows
+}) {
+  const payload = {
+    shiftID: shiftID || null,
+    employeeIDs: employeeIDs || [],
+    effectiveTo,
+    mode
+  }
+  return createRecord('shift-assignments/remove', payload)
+}
+

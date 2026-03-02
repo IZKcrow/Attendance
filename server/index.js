@@ -464,8 +464,19 @@ app.get('/employees', async (req, res) => {
           e.ContactNumber AS phone,
           e.Email AS email,
           e.HireDate,
-          latestShift.ShiftName AS assignedShift
+          ISNULL(currentShift.ShiftName, latestShift.ShiftName) AS assignedShift
         FROM dbo.Employees e
+        OUTER APPLY (
+          SELECT TOP 1 s.ShiftName
+          FROM dbo.EmployeeShiftAllotments a
+          JOIN dbo.ShiftDefinitions s ON s.ShiftID = a.ShiftID
+          WHERE a.EmployeeID = e.EmployeeID
+            AND a.EffectiveFrom <= CAST(GETDATE() AS DATE)
+            AND (a.EffectiveTo IS NULL OR a.EffectiveTo >= CAST(GETDATE() AS DATE))
+          ORDER BY
+            a.EffectiveFrom DESC,
+            ISNULL(a.EffectiveTo, CAST('9999-12-31' AS DATE)) DESC
+        ) currentShift
         OUTER APPLY (
           SELECT TOP 1 s.ShiftName
           FROM dbo.EmployeeShiftAllotments a
@@ -1038,9 +1049,12 @@ app.post('/shift-assignments/bulk', async (req, res) => {
 
   if (!shiftID) return res.status(400).json({ error: 'shiftID is required' })
 
+  let transaction
   try {
     const pool = await getPool()
-    const { randomUUID } = require('crypto')
+    transaction = new sql.Transaction(pool)
+    await transaction.begin()
+    const request = new sql.Request(transaction)
 
     const shiftExists = await pool.request()
       .input('ShiftID', sql.NVarChar(36), shiftID)
@@ -1052,49 +1066,185 @@ app.post('/shift-assignments/bulk', async (req, res) => {
       const allEmp = await pool.request().query('SELECT EmployeeID FROM dbo.Employees')
       targetEmployeeIDs = allEmp.recordset.map((r) => r.EmployeeID)
     } else if (Array.isArray(employeeIDs)) {
-      targetEmployeeIDs = employeeIDs.filter(Boolean)
+      targetEmployeeIDs = Array.from(new Set(employeeIDs.filter(Boolean)))
     }
 
     if (!targetEmployeeIDs.length) return res.status(400).json({ error: 'No employees selected' })
 
-    const effFrom = effectiveFrom ? new Date(effectiveFrom) : new Date()
-    if (Number.isNaN(effFrom.getTime())) return res.status(400).json({ error: 'Invalid effectiveFrom date' })
+    const effFrom = effectiveFrom ? new Date(effectiveFrom) : null
     const effTo = effectiveTo ? new Date(effectiveTo) : null
+    if (!effFrom) return res.status(400).json({ error: 'effectiveFrom is required' })
+    if (Number.isNaN(effFrom.getTime())) return res.status(400).json({ error: 'Invalid effectiveFrom date' })
     if (effTo && Number.isNaN(effTo.getTime())) return res.status(400).json({ error: 'Invalid effectiveTo date' })
 
-    let assigned = 0
-    for (const empID of targetEmployeeIDs) {
-      // Keep one assignment per employee/effective date and close open overlaps.
-      await pool.request()
-        .input('EmployeeID', sql.NVarChar(36), empID)
-        .input('EffectiveFrom', sql.Date, effFrom)
-        .query(`
-          DELETE FROM dbo.EmployeeShiftAllotments
-          WHERE EmployeeID=@EmployeeID AND EffectiveFrom=@EffectiveFrom;
+    // Build CSV list and pass to SQL to split
+    const empCsv = targetEmployeeIDs.join(',')
+    request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
+    request.input('ShiftID', sql.NVarChar(36), shiftID)
+    request.input('EffectiveFrom', sql.Date, effFrom)
+    request.input('EffectiveTo', sql.Date, effTo || null)
+    request.input('HasEffectiveTo', sql.Bit, effTo ? 1 : 0)
 
-          UPDATE dbo.EmployeeShiftAllotments
-          SET EffectiveTo = DATEADD(DAY, -1, @EffectiveFrom)
-          WHERE EmployeeID=@EmployeeID
-            AND EffectiveFrom < @EffectiveFrom
-            AND (EffectiveTo IS NULL OR EffectiveTo >= @EffectiveFrom);
-        `)
+    const result = await request.query(`
+      DECLARE @Emp TABLE (EmployeeID NVARCHAR(36));
+      ;WITH EmpSplit AS (
+        SELECT LTRIM(RTRIM(m.n.value('.','nvarchar(100)'))) AS value
+        FROM (SELECT CAST('<i>' + REPLACE(@EmpCSV, ',', '</i><i>') + '</i>' AS XML) AS x) t
+        CROSS APPLY x.nodes('/i') m(n)
+      )
+      INSERT INTO @Emp(EmployeeID)
+      SELECT value FROM EmpSplit WHERE value <> '';
 
-      const reqAll = pool.request()
-      reqAll.input('AllotmentID', sql.NVarChar(36), randomUUID())
-      reqAll.input('EmployeeID', sql.NVarChar(36), empID)
-      reqAll.input('ShiftID', sql.NVarChar(36), shiftID)
-      reqAll.input('EffectiveFrom', sql.Date, effFrom)
-      reqAll.input('EffectiveTo', sql.Date, effTo)
-      await reqAll.query(`
-        INSERT INTO dbo.EmployeeShiftAllotments (AllotmentID, EmployeeID, ShiftID, EffectiveFrom, EffectiveTo)
-        VALUES (@AllotmentID, @EmployeeID, @ShiftID, @EffectiveFrom, @EffectiveTo)
-      `)
-      assigned += 1
-    }
+      IF EXISTS (SELECT 1 FROM @Emp WHERE EmployeeID IS NULL OR EmployeeID = '')
+      BEGIN
+        RAISERROR('Invalid employeeIDs', 16, 1);
+      END
 
+      DECLARE @EffFrom DATE = TRY_CONVERT(DATE, @EffectiveFrom);
+      DECLARE @EffTo   DATE = TRY_CONVERT(DATE, @EffectiveTo);
+      IF @EffFrom IS NULL BEGIN RAISERROR('Invalid effectiveFrom date', 16, 1); END
+      IF (@HasEffectiveTo = 1 AND @EffTo IS NULL) BEGIN RAISERROR('Invalid effectiveTo date', 16, 1); END
+
+      -- hard replace: remove all existing assignments for these employees
+      DELETE A
+      FROM dbo.EmployeeShiftAllotments A
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID;
+
+      -- insert new assignments (one per employee)
+      INSERT INTO dbo.EmployeeShiftAllotments (AllotmentID, EmployeeID, ShiftID, EffectiveFrom, EffectiveTo)
+      SELECT NEWID(), E.EmployeeID, @ShiftID, @EffFrom, CASE WHEN @HasEffectiveTo=1 THEN @EffTo ELSE NULL END
+      FROM @Emp E;
+    `)
+
+    await transaction.commit()
+    // rowsAffected is an array per statement; take last insert count
+    const assigned = result?.rowsAffected?.[result.rowsAffected.length - 1] || 0
     res.json({ success: true, assigned, shiftID })
   } catch (err) {
     console.error('shift assignment failed', err)
+    try { if (transaction) await transaction.rollback() } catch (_) {}
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// End (soft-remove) shift assignments by setting EffectiveTo
+app.post('/shift-assignments/remove', async (req, res) => {
+  const { shiftID = null, employeeIDs = [], effectiveTo = null } = req.body
+  if (!Array.isArray(employeeIDs) || employeeIDs.length === 0) {
+    return res.status(400).json({ error: 'employeeIDs array is required' })
+  }
+
+  const effTo = effectiveTo ? new Date(effectiveTo) : new Date()
+  if (Number.isNaN(effTo.getTime())) return res.status(400).json({ error: 'Invalid effectiveTo date' })
+
+  let transaction
+  try {
+    const pool = await getPool()
+    transaction = new sql.Transaction(pool)
+    await transaction.begin()
+    const request = new sql.Request(transaction)
+    const isoDate = effTo.toISOString().slice(0, 10) // YYYY-MM-DD
+
+    const empCsv = Array.from(new Set(employeeIDs.filter(Boolean))).join(',')
+    request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
+    request.input('EffectiveTo', sql.NVarChar(20), isoDate)
+    request.input('ShiftID', sql.NVarChar(36), shiftID || null)
+    request.input('HasShift', sql.Bit, shiftID ? 1 : 0)
+
+    const result = await request.query(`
+      DECLARE @Emp TABLE (EmployeeID NVARCHAR(36));
+      ;WITH EmpSplit AS (
+        SELECT LTRIM(RTRIM(m.n.value('.','nvarchar(100)'))) AS value
+        FROM (SELECT CAST('<i>' + REPLACE(@EmpCSV, ',', '</i><i>') + '</i>' AS XML) AS x) t
+        CROSS APPLY x.nodes('/i') m(n)
+      )
+      INSERT INTO @Emp(EmployeeID)
+      SELECT value FROM EmpSplit WHERE value <> '';
+
+      IF EXISTS (SELECT 1 FROM @Emp WHERE EmployeeID IS NULL OR EmployeeID = '')
+      BEGIN
+        RAISERROR('Invalid employeeIDs', 16, 1);
+      END
+
+      DECLARE @EffTo DATE = TRY_CONVERT(DATE, @EffectiveTo);
+      IF @EffTo IS NULL BEGIN RAISERROR('Invalid effectiveTo date', 16, 1); END
+
+      DECLARE @AffectedDeleteFuture INT = 0, @AffectedUpdate INT = 0, @AffectedCleanup INT = 0;
+
+      -- delete future assignments only
+      DELETE A
+      FROM dbo.EmployeeShiftAllotments A
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+      WHERE (@HasShift = 0 OR A.ShiftID = @ShiftID)
+        AND A.EffectiveFrom > @EffTo;
+      SET @AffectedDeleteFuture = @@ROWCOUNT;
+
+      -- end-date current assignments that overlap
+      UPDATE A
+      SET EffectiveTo = @EffTo
+      FROM dbo.EmployeeShiftAllotments A
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+      WHERE (@HasShift = 0 OR A.ShiftID = @ShiftID)
+        AND A.EffectiveFrom <= @EffTo
+        AND (A.EffectiveTo IS NULL OR A.EffectiveTo >= @EffTo);
+      SET @AffectedUpdate = @@ROWCOUNT;
+
+      -- cleanup: remove any already-ended assignments up to EffTo (allows repeated removes)
+      DELETE A
+      FROM dbo.EmployeeShiftAllotments A
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+      WHERE (@HasShift = 0 OR A.ShiftID = @ShiftID)
+        AND A.EffectiveFrom <= @EffTo
+        AND A.EffectiveTo IS NOT NULL
+        AND A.EffectiveTo <= @EffTo;
+      SET @AffectedCleanup = @@ROWCOUNT;
+
+      SELECT @AffectedDeleteFuture AS DeletedFuture, @AffectedUpdate AS UpdatedCurrent, @AffectedCleanup AS DeletedCleanup;
+    `)
+
+    await transaction.commit()
+    const summary = result?.recordset?.[0] || {}
+    const affected = (summary.DeletedFuture || 0) + (summary.UpdatedCurrent || 0) + (summary.DeletedCleanup || 0)
+    res.json({ success: true, affected, effectiveTo: isoDate, shiftID: shiftID || null })
+  } catch (err) {
+    console.error('shift assignment remove failed', err)
+    try { if (transaction) await transaction.rollback() } catch (_) {}
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// List current assignments for given employees
+app.post('/shift-assignments/list', async (req, res) => {
+  const { employeeIDs = [] } = req.body
+  if (!Array.isArray(employeeIDs) || employeeIDs.length === 0) {
+    return res.status(400).json({ error: 'employeeIDs array is required' })
+  }
+  try {
+    const pool = await getPool()
+    const empCsv = employeeIDs.filter(Boolean).join(',')
+    const request = pool.request()
+    request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
+    const result = await request.query(`
+      DECLARE @Emp TABLE (EmployeeID NVARCHAR(36));
+      ;WITH EmpSplit AS (
+        SELECT LTRIM(RTRIM(m.n.value('.','nvarchar(100)'))) AS value
+        FROM (SELECT CAST('<i>' + REPLACE(@EmpCSV, ',', '</i><i>') + '</i>' AS XML) AS x) t
+        CROSS APPLY x.nodes('/i') m(n)
+      )
+      INSERT INTO @Emp(EmployeeID)
+      SELECT value FROM EmpSplit WHERE value <> '';
+
+      SELECT A.EmployeeID, A.ShiftID, A.EffectiveFrom, A.EffectiveTo,
+             SD.ShiftName, SD.MorningTimeIn, SD.MorningTimeOut, SD.AfternoonTimeIn, SD.AfternoonTimeOut
+      FROM dbo.EmployeeShiftAllotments A
+      LEFT JOIN dbo.ShiftDefinitions SD ON A.ShiftID = SD.ShiftID
+      WHERE A.EmployeeID IN (SELECT EmployeeID FROM @Emp)
+        AND (A.EffectiveTo IS NULL OR A.EffectiveTo >= CAST(GETDATE() AS DATE))
+      ORDER BY A.EmployeeID, A.EffectiveFrom DESC;
+    `)
+    res.json(result.recordset || [])
+  } catch (err) {
+    console.error('list assignments failed', err)
     res.status(500).json({ error: err.message })
   }
 })

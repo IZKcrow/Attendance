@@ -8,10 +8,13 @@ import {
   TextField,
   Typography,
   Chip,
-  Stack
+  Stack,
+  InputAdornment,
+  IconButton
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import ClearIcon from '@mui/icons-material/Clear'
 
 function fmtDate(value) {
   if (!value) return '-'
@@ -379,6 +382,16 @@ export default function AttendanceReportPage() {
                 value={editRow.MorningTimeIn || ''}
                 onChange={(e) => handleEditChange('MorningTimeIn', e.target.value)}
                 InputLabelProps={{ shrink: true }}
+                helperText="Leave blank to clear"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => handleEditChange('MorningTimeIn', '')} aria-label="clear AM In">
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                }}
               />
               <TextField
                 type="time"
@@ -387,6 +400,16 @@ export default function AttendanceReportPage() {
                 value={editRow.MorningTimeOut || ''}
                 onChange={(e) => handleEditChange('MorningTimeOut', e.target.value)}
                 InputLabelProps={{ shrink: true }}
+                helperText="Leave blank to clear"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => handleEditChange('MorningTimeOut', '')} aria-label="clear AM Out">
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                }}
               />
               <TextField
                 type="time"
@@ -395,6 +418,16 @@ export default function AttendanceReportPage() {
                 value={editRow.AfternoonTimeIn || ''}
                 onChange={(e) => handleEditChange('AfternoonTimeIn', e.target.value)}
                 InputLabelProps={{ shrink: true }}
+                helperText="Leave blank to clear"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => handleEditChange('AfternoonTimeIn', '')} aria-label="clear PM In">
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                }}
               />
               <TextField
                 type="time"
@@ -403,6 +436,16 @@ export default function AttendanceReportPage() {
                 value={editRow.AfternoonTimeOut || ''}
                 onChange={(e) => handleEditChange('AfternoonTimeOut', e.target.value)}
                 InputLabelProps={{ shrink: true }}
+                helperText="Leave blank to clear"
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton size="small" onClick={() => handleEditChange('AfternoonTimeOut', '')} aria-label="clear PM Out">
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  )
+                }}
               />
             </Box>
             <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>

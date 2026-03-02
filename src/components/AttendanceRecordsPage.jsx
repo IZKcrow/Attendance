@@ -8,10 +8,13 @@ import {
   FormControl,
   InputLabel,
   Select,
-  MenuItem
+  MenuItem,
+  Snackbar,
+  Alert
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import { useSnackbar } from './ui/Snackbar'
 
 function fmtDate(value) {
   if (!value) return '-'
@@ -93,6 +96,7 @@ function getFriendlyAttendanceError(err, mode = 'attendance') {
 }
 
 export default function AttendanceRecordsPage() {
+  const { show, SnackbarComponent } = useSnackbar()
   const [records, setRecords] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
@@ -185,8 +189,9 @@ export default function AttendanceRecordsPage() {
 
   return (
     <>
-      <FaceScanForm onScanned={loadRecords} />
-      <ClockInForm onClockIn={loadRecords} />
+      {SnackbarComponent}
+      <FaceScanForm onScanned={loadRecords} notify={show} />
+      <ClockInForm onClockIn={loadRecords} notify={show} />
 
       <GenericDataTable
         title="Attendance"
@@ -225,7 +230,7 @@ export default function AttendanceRecordsPage() {
   )
 }
 
-function FaceScanForm({ onScanned }) {
+function FaceScanForm({ onScanned, notify }) {
   const [employees, setEmployees] = React.useState([])
   const [selectedCode, setSelectedCode] = React.useState('')
   const [deviceCode, setDeviceCode] = React.useState('KIOSK-001')
@@ -248,7 +253,7 @@ function FaceScanForm({ onScanned }) {
   }, [])
 
   const doFaceScan = async () => {
-    if (!selectedCode) return alert('Select an employee for prototype face scan.')
+    if (!selectedCode) return notify?.('Select an employee for prototype face scan.', 'warning')
     setScanning(true)
     try {
       const result = await api.faceScanAttendance({
@@ -259,9 +264,12 @@ function FaceScanForm({ onScanned }) {
       })
       onScanned && onScanned()
       setSelectedCode('')
-      alert(`Face scan success: ${result.employeeName || result.employeeCode} -> ${result.logType} at ${result.time}`)
+      notify?.(
+        `Face scan success: ${result.employeeName || result.employeeCode} -> ${result.logType} at ${result.time || 'now'}`,
+        'success'
+      )
     } catch (err) {
-      alert(getFriendlyAttendanceError(err, 'face'))
+      notify?.(getFriendlyAttendanceError(err, 'face'), 'error')
     } finally {
       setScanning(false)
     }
@@ -319,7 +327,7 @@ function FaceScanForm({ onScanned }) {
   )
 }
 
-function ClockInForm({ onClockIn }) {
+function ClockInForm({ onClockIn, notify }) {
   const [employees, setEmployees] = React.useState([])
   const [selectedCode, setSelectedCode] = React.useState('')
   const [logType, setLogType] = React.useState('MORNING_IN')
@@ -332,15 +340,15 @@ function ClockInForm({ onClockIn }) {
   }, [])
 
   const doClockIn = async () => {
-    if (!selectedCode) return alert('Select an employee')
+    if (!selectedCode) return notify?.('Select an employee', 'warning')
     setSubmitting(true)
     try {
       await api.recordAttendance(selectedCode, logType)
       onClockIn && onClockIn()
       setSelectedCode('')
-      alert('Attendance log recorded')
+      notify?.('Attendance log recorded', 'success')
     } catch (err) {
-      alert(getFriendlyAttendanceError(err, 'attendance'))
+      notify?.(getFriendlyAttendanceError(err, 'attendance'), 'error')
     } finally {
       setSubmitting(false)
     }
