@@ -3,8 +3,10 @@ import React from 'react'
 import { TableCell } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import { useSnackbar } from './ui/Snackbar'
 
 export default function UsersPage() {
+  const { show, SnackbarComponent } = useSnackbar()
   const [users, setUsers] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
@@ -21,6 +23,7 @@ export default function UsersPage() {
       setError(null)
     } catch (err) {
       setError(err.message)
+      show(`Load failed: ${err.message || err}`, 'error')
     } finally {
       setLoading(false)
     }
@@ -33,6 +36,7 @@ export default function UsersPage() {
       setError(null)
     } catch (err) {
       setError(err.message)
+      show(`Create failed: ${err.message || err}`, 'error')
     }
   }
 
@@ -43,6 +47,7 @@ export default function UsersPage() {
       setError(null)
     } catch (err) {
       setError(err.message)
+      show(`Update failed: ${err.message || err}`, 'error')
     }
   }
 
@@ -51,30 +56,35 @@ export default function UsersPage() {
       await api.deleteUser(id)
       setUsers(users.filter(u => u.UserID !== id))
       setError(null)
+      show('User deleted.', 'success')
     } catch (err) {
       setError(err.message)
+      show(`Delete failed: ${err.message || err}`, 'error')
     }
   }
 
   return (
-    <GenericDataTable
-      title="Users"
-      columns={['name', 'position', 'email', 'department']}
-      data={users}
-      loading={loading}
-      error={error}
-      primaryKeyField="UserID"
-      onAdd={handleAdd}
-      onEdit={handleEdit}
-      onDelete={handleDelete}
-      renderRow={(row) => (
-        <>
-          <TableCell>{row.name}</TableCell>
-          <TableCell>{row.position}</TableCell>
-          <TableCell>{row.email}</TableCell>
-          <TableCell>{row.department}</TableCell>
-        </>
-      )}
-    />
+    <>
+      {SnackbarComponent}
+      <GenericDataTable
+        title="Users"
+        columns={['name', 'position', 'email', 'department']}
+        data={users}
+        loading={loading}
+        error={error}
+        primaryKeyField="UserID"
+        onAdd={handleAdd}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        renderRow={(row) => (
+          <>
+            <TableCell>{row.name}</TableCell>
+            <TableCell>{row.position}</TableCell>
+            <TableCell>{row.email}</TableCell>
+            <TableCell>{row.department}</TableCell>
+          </>
+        )}
+      />
+    </>
   )
 }

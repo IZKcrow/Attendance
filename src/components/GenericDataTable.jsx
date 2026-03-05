@@ -9,6 +9,7 @@ import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
+import { useSnackbar } from './ui/Snackbar'
 
 export default function GenericDataTable({
   title,
@@ -25,42 +26,109 @@ export default function GenericDataTable({
   allowAdd = !readOnly,
   allowEdit = !readOnly,
   allowDelete = !readOnly,
-  onRowClick = null
+  onRowClick = null,
+  columnSchema = {},
+  useDeleteDialog = true
 }) {
+  const { show, SnackbarComponent } = useSnackbar()
   const showActions = allowEdit || allowDelete
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editing, setEditing] = React.useState(null)
   const [form, setForm] = React.useState({})
   const [search, setSearch] = React.useState('')
+  const [deleteTarget, setDeleteTarget] = React.useState(null)
+  const [localError, setLocalError] = React.useState(null)
 
-  const handleOpenAdd = () => { setEditing(null); setForm({}); setDialogOpen(true) }
-  const handleOpenEdit = (row) => { setEditing(row); setForm({ ...row }); setDialogOpen(true) }
-  const handleClose = () => setDialogOpen(false)
+  const handleOpenAdd = React.useCallback(() => {
+    setEditing(null)
+    setForm({})
+    setLocalError(null)
+    setDialogOpen(true)
+  }, [])
 
-  const handleSave = async () => {
-    if (editing) {
-      // Merge form changes with original record to preserve unedited fields
-      const updatedData = { ...editing, ...form }
-      await onEdit(updatedData)
-    } else {
-      await onAdd(form)
+  const handleOpenEdit = React.useCallback((row) => {
+    setEditing(row)
+    setForm({ ...row })
+    setLocalError(null)
+    setDialogOpen(true)
+  }, [])
+
+  const handleClose = React.useCallback(() => setDialogOpen(false), [])
+
+  const handleSave = React.useCallback(async () => {
+    try {
+      setLocalError(null)
+      if (editing) {
+        // Merge form changes with original record to preserve unedited fields
+        const updatedData = { ...editing, ...form }
+        await onEdit(updatedData)
+      } else {
+        await onAdd(form)
+      }
+      setDialogOpen(false)
+    } catch (err) {
+      const msg = err?.message || 'Save failed'
+      setLocalError(msg)
+      show(msg, 'error')
     }
-    setDialogOpen(false)
-  }
+  }, [editing, form, onAdd, onEdit, show])
 
-  const handleDelete = async (row) => {
-    const id = row[primaryKeyField]
-    if (confirm('Delete this record?')) await onDelete(id)
-  }
+  const handleDeleteImmediate = React.useCallback(async (row) => {
+    if (!row) return
+    const id = row?.[primaryKeyField]
+    if (!id) {
+      const msg = `Missing key field: ${primaryKeyField}`
+      setLocalError(msg)
+      show(msg, 'error')
+      return
+    }
+    try {
+      setLocalError(null)
+      await onDelete(id)
+    } catch (err) {
+      const msg = err?.message || 'Delete failed'
+      setLocalError(msg)
+      show(msg, 'error')
+    }
+  }, [onDelete, primaryKeyField, show])
+
+  const handleDeleteClick = React.useCallback((row) => {
+    setLocalError(null)
+    if (!useDeleteDialog) {
+      handleDeleteImmediate(row)
+      return
+    }
+    setDeleteTarget(row)
+  }, [useDeleteDialog, handleDeleteImmediate])
+
+  const handleConfirmDelete = React.useCallback(async () => {
+    if (!deleteTarget) return
+    const id = deleteTarget?.[primaryKeyField]
+    if (!id) {
+      const msg = `Missing key field: ${primaryKeyField}`
+      setLocalError(msg)
+      show(msg, 'error')
+      return
+    }
+    try {
+      setLocalError(null)
+      await onDelete(id)
+      setDeleteTarget(null)
+    } catch (err) {
+      const msg = err?.message || 'Delete failed'
+      setLocalError(msg)
+      show(msg, 'error')
+    }
+  }, [deleteTarget, onDelete, primaryKeyField, show])
 
   const [page, setPage] = React.useState(0)
   const [rowsPerPage, setRowsPerPage] = React.useState(10)
 
-  const handleChangePage = (_evt, newPage) => setPage(newPage)
-  const handleChangeRowsPerPage = (evt) => {
+  const handleChangePage = React.useCallback((_evt, newPage) => setPage(newPage), [])
+  const handleChangeRowsPerPage = React.useCallback((evt) => {
     setRowsPerPage(parseInt(evt.target.value, 10))
     setPage(0)
-  }
+  }, [])
 
   const filtered = React.useMemo(() => {
     if (!search.trim()) return data
@@ -74,8 +142,14 @@ export default function GenericDataTable({
 
   const displayed = loading ? [] : filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage)
 
+  React.useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(filtered.length / rowsPerPage) - 1)
+    if (page > maxPage) setPage(maxPage)
+  }, [filtered.length, page, rowsPerPage])
+
   return (
     <Box>
+      {SnackbarComponent}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
         <h3 style={{ margin: 0 }}>{title}</h3>
         {allowAdd && (
@@ -115,7 +189,7 @@ export default function GenericDataTable({
         />
       </Box>
 
-      {error && <Alert severity="error">{error}</Alert>}
+      {(error || localError) && <Alert severity="error">{error || localError}</Alert>}
 
       <TableContainer
         component={Paper}
@@ -150,7 +224,7 @@ export default function GenericDataTable({
           </TableHead>
           <TableBody>
             {loading && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center"><CircularProgress /></TableCell></TableRow>}
-            {!loading && data.length === 0 && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center">No data</TableCell></TableRow>}
+            {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center">No matching records</TableCell></TableRow>}
             {!loading && displayed.map((row) => (
               <TableRow
                 key={row[primaryKeyField]}
@@ -170,7 +244,7 @@ export default function GenericDataTable({
                         <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}><EditIcon fontSize="small" /></IconButton>
                       )}
                       {allowDelete && (
-                        <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleDelete(row) }}><DeleteIcon fontSize="small" /></IconButton>
+                        <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleDeleteClick(row) }}><DeleteIcon fontSize="small" /></IconButton>
                       )}
                     </>
                   )}
@@ -204,8 +278,9 @@ export default function GenericDataTable({
                 key={col}
                 fullWidth
                 label={col}
-                value={form[col] || ''}
-                onChange={(e) => setForm({ ...form, [col]: e.target.value })}
+                type={columnSchema[col]?.type || 'text'}
+                value={form[col] ?? ''}
+                onChange={(e) => setForm((prev) => ({ ...prev, [col]: e.target.value }))}
               />
             ))}
           </Box>
@@ -215,6 +290,19 @@ export default function GenericDataTable({
           <Button onClick={handleSave} variant="contained">Save</Button>
         </DialogActions>
       </Dialog>
+
+      {useDeleteDialog && (
+        <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+          <DialogTitle>Confirm Deletion</DialogTitle>
+          <DialogContent>
+            Delete this record? This action cannot be undone.
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button color="error" variant="contained" onClick={handleConfirmDelete}>Delete</Button>
+          </DialogActions>
+        </Dialog>
+      )}
     </Box>
   )
 }

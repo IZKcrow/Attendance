@@ -32,7 +32,7 @@ export default function Dashboard({ onLogout }) {
       case 'employees':
         return <EmployeeTable />
       case 'overview':
-        return <OverviewDashboard />
+        return <OverviewDashboard onOpenAttendance={() => setCurrentPage('attendance')} />
       case 'users':
         return <UsersPage />
       case 'devices':

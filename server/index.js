@@ -2337,14 +2337,40 @@ app.put('/employees/:id', async (req, res) => {
 
 app.delete('/employees/:id', async (req, res) => {
   const id = req.params.id
+  let transaction = null
   try {
     const pool = await getPool()
-    const result = await pool.request().input('EmployeeID', sql.NVarChar(36), id).query('DELETE FROM dbo.Employees WHERE EmployeeID=@EmployeeID')
-    if (result.rowsAffected[0] === 0) return res.status(404).json({ error: 'Not found' })
+    transaction = new sql.Transaction(pool)
+    await transaction.begin()
+    const request = new sql.Request(transaction)
+    request.input('EmployeeID', sql.NVarChar(36), id)
+
+    const exists = await request.query('SELECT 1 AS ok FROM dbo.Employees WHERE EmployeeID=@EmployeeID')
+    if (!exists.recordset.length) {
+      await transaction.rollback()
+      return res.status(404).json({ error: 'Not found' })
+    }
+
+    // Remove dependent rows first to avoid FK violations on employee delete.
+    await request.query(`
+      DELETE FROM dbo.EmployeeShiftAllotments WHERE EmployeeID=@EmployeeID;
+      DELETE FROM dbo.AttendanceRecords WHERE EmployeeID=@EmployeeID;
+      DELETE FROM dbo.BiometricScans WHERE EmployeeID=@EmployeeID;
+      DELETE FROM dbo.FaceProfiles WHERE EmployeeID=@EmployeeID;
+      DELETE FROM dbo.Employees WHERE EmployeeID=@EmployeeID;
+    `)
+
+    await transaction.commit()
     res.json({ success: true })
   } catch (err) {
+    try {
+      if (transaction) await transaction.rollback()
+    } catch (_) {}
     console.error(err)
-    res.status(500).json({ error: err.message })
+    if (err?.number === 547) {
+      return res.status(400).json({ error: 'Cannot delete employee because related records still exist.' })
+    }
+    res.status(500).json({ error: 'Delete employee failed.' })
   }
 })
 

@@ -35,6 +35,7 @@ import DeleteIcon from '@mui/icons-material/Delete'
 import EmployeeDialog from './EmployeeDialog'
 import * as api from '../api/employees'
 import { fetchEmployeeAssignments } from '../api'
+import { useSnackbar } from './ui/Snackbar'
 
 function formatSqlTime(value) {
   if (!value) return '—'
@@ -110,6 +111,7 @@ function EmployeeRow({ e, onEdit, onDelete, onView }) {
 }
 
 export default function EmployeeTable() {
+  const { show, SnackbarComponent } = useSnackbar()
   const [query, setQuery] = React.useState('')
   const [department, setDepartment] = React.useState('All')
   const [page, setPage] = React.useState(0)
@@ -121,6 +123,7 @@ export default function EmployeeTable() {
   const [editing, setEditing] = React.useState(null)
   const [viewing, setViewing] = React.useState(null)
   const [viewLoading, setViewLoading] = React.useState(false)
+  const [deleteTarget, setDeleteTarget] = React.useState(null)
 
   const departments = React.useMemo(() => [
     'All',
@@ -182,28 +185,39 @@ export default function EmployeeTable() {
       if (emp.id) {
         const updated = await api.updateEmployee(emp)
         setEmployees(prev => prev.map(p => p.id === updated.id ? updated : p))
+        show('Employee updated successfully.', 'success')
       } else {
         const created = await api.createEmployee(emp)
         setEmployees(prev => [created, ...prev])
+        show('Employee created successfully.', 'success')
       }
       setError(null)
     } catch (err) {
       setError(err.message)
+      show(`Save failed: ${err.message || err}`, 'error')
     }
   }
 
-  const handleDelete = async (id) => {
-    if (!confirm('Delete this employee?')) return
+  const askDelete = (emp) => {
+    setDeleteTarget(emp)
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget?.id) return
     try {
-      await api.deleteEmployee(id)
-      setEmployees(prev => prev.filter(p => p.id !== id))
+      await api.deleteEmployee(deleteTarget.id)
+      setEmployees(prev => prev.filter(p => p.id !== deleteTarget.id))
+      show('Employee deleted.', 'success')
+      setDeleteTarget(null)
     } catch (err) {
       setError(err.message)
+      show(`${err.message || 'Delete failed'}`, 'error')
     }
   }
 
   return (
     <>
+      {SnackbarComponent}
       <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           <TextField
@@ -268,7 +282,7 @@ export default function EmployeeTable() {
               </TableRow>
             )}
             {!loading && filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map(e => (
-              <EmployeeRow key={e.id} e={e} onEdit={openEdit} onDelete={handleDelete} onView={openView} />
+              <EmployeeRow key={e.id} e={e} onEdit={openEdit} onDelete={() => askDelete(e)} onView={openView} />
             ))}
             {!loading && filtered.length === 0 && (
               <TableRow>
@@ -301,6 +315,19 @@ export default function EmployeeTable() {
         employee={viewing}
         loading={viewLoading}
       />
+
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Confirm Delete</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2">
+            Delete employee <strong>{deleteTarget?.name || 'this employee'}</strong>? This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleDelete}>Delete</Button>
+        </DialogActions>
+      </Dialog>
     </>
   )
 }

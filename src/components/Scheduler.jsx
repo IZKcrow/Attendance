@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+﻿import React, { useEffect, useMemo, useState } from 'react'
 import {
   Box,
   Typography,
@@ -19,6 +19,7 @@ import {
   List,
   ListItem
 } from '@mui/material'
+import { createFilterOptions } from '@mui/material/Autocomplete'
 import * as api from '../api'
 import { useSnackbar } from './ui/Snackbar'
 
@@ -39,6 +40,12 @@ export default function Scheduler() {
   const [removeMode, setRemoveMode] = useState('shift') // 'shift' | 'all'
   const [assignments, setAssignments] = useState([])
   const assignmentsTimer = React.useRef(null)
+  const EMPLOYEE_PANEL_LIMIT = 25
+  const TAG_LIMIT = 3
+  const employeeFilterOptions = useMemo(
+    () => createFilterOptions({ stringify: (emp) => `${emp.EmployeeCode || ''} ${emp.name || ''}`.trim(), limit: 100 }),
+    []
+  )
 
   const normalizeSelected = React.useCallback((ids = []) => [...new Set(ids.filter(Boolean))], [])
 
@@ -91,6 +98,16 @@ export default function Scheduler() {
     employees.forEach(e => { map[e.id] = e })
     return map
   }, [employees])
+
+  const selectedEmployeeList = useMemo(
+    () => selectedEmployeeIDs.map((id) => employeeMap[id]).filter(Boolean),
+    [selectedEmployeeIDs, employeeMap]
+  )
+
+  const visibleSelectedEmployeeIDs = useMemo(
+    () => selectedEmployeeIDs.slice(0, EMPLOYEE_PANEL_LIMIT),
+    [selectedEmployeeIDs]
+  )
 
   const fmtDate = (value) => {
     if (!value) return '-'
@@ -207,35 +224,42 @@ export default function Scheduler() {
       <Grid container spacing={2}>
         <Grid item xs={12}>
           {selectedEmployeeIDs.length === 0 ? (
-            <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', mb: 2 }}>
+            <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)', mb: 2 }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Selected Employees</Typography>
               <Typography variant="body2" color="text.secondary">Select employees to see current shifts.</Typography>
             </Paper>
           ) : (
-            <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', mb: 2 }}>
+            <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)', mb: 2 }}>
               <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Selected Employees & Current Shifts</Typography>
               <Grid container spacing={1}>
               <Grid item xs={4}><Typography variant="caption" color="text.secondary">Employee</Typography></Grid>
               <Grid item xs={4}><Typography variant="caption" color="text.secondary">Current Shift</Typography></Grid>
               <Grid item xs={4}><Typography variant="caption" color="text.secondary">Effective</Typography></Grid>
-              {selectedEmployeeIDs.map((id) => {
+              {visibleSelectedEmployeeIDs.map((id) => {
                 const emp = employeeMap[id]
                 const current = assignments.find(a => a.EmployeeID === id)
                 return (
                   <React.Fragment key={id}>
                     <Grid item xs={4}><Typography variant="body2">{emp?.name || emp?.EmployeeCode || id}</Typography></Grid>
                     <Grid item xs={4}><Typography variant="body2">{current?.ShiftName || current?.ShiftID || 'None'}</Typography></Grid>
-                    <Grid item xs={4}><Typography variant="body2">{current?.EffectiveFrom ? `${fmtDate(current.EffectiveFrom)} → ${current.EffectiveTo ? fmtDate(current.EffectiveTo) : 'open'}` : '—'}</Typography></Grid>
+                    <Grid item xs={4}><Typography variant="body2">{current?.EffectiveFrom ? `${fmtDate(current.EffectiveFrom)} -> ${current.EffectiveTo ? fmtDate(current.EffectiveTo) : 'open'}` : '-'}</Typography></Grid>
                   </React.Fragment>
                 )
               })}
+              {selectedEmployeeIDs.length > EMPLOYEE_PANEL_LIMIT && (
+                <Grid item xs={12}>
+                  <Typography variant="caption" color="text.secondary">
+                    Showing first {EMPLOYEE_PANEL_LIMIT} of {selectedEmployeeIDs.length} selected employees. Use search to refine.
+                  </Typography>
+                </Grid>
+              )}
             </Grid>
           </Paper>
           )}
         </Grid>
 
         <Grid item xs={12} md={6}>
-          <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)' }}>
+          <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Shift Selection</Typography>
             <FormControl fullWidth>
               <InputLabel id="shift-label">Shift</InputLabel>
@@ -262,18 +286,27 @@ export default function Scheduler() {
         </Grid>
 
         <Grid item xs={12} md={6}>
-          <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)' }}>
+          <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Employees</Typography>
             <Autocomplete
               multiple
               options={employees}
+              isOptionEqualToValue={(option, value) => option.id === value.id}
+              filterOptions={employeeFilterOptions}
               getOptionLabel={(emp) => `${emp.EmployeeCode || ''} ${emp.name || ''}`.trim() || 'Unnamed'}
-              value={employees.filter(e => selectedEmployeeIDs.includes(e.id))}
+              value={selectedEmployeeList}
               onChange={(_, vals) => setSelectedEmployeeIDs(normalizeSelected(vals.map(v => v.id)))}
+              limitTags={TAG_LIMIT}
+              ListboxProps={{ style: { maxHeight: 320 } }}
               renderInput={(params) => <TextField {...params} label="Search employees" />}
               disableCloseOnSelect
               sx={{ mb: 1 }}
             />
+            {selectedEmployeeIDs.length > TAG_LIMIT && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                {selectedEmployeeIDs.length} employees selected.
+              </Typography>
+            )}
             <Box sx={{ mt: 1, display: 'flex', gap: 1 }}>
               <Button
                 size="small"
@@ -296,7 +329,7 @@ export default function Scheduler() {
         </Grid>
 
         <Grid item xs={12}>
-          <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)' }}>
+          <Paper variant="outlined" sx={{ p: 2, borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--text)' }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1 }}>Effective Period</Typography>
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
@@ -327,7 +360,7 @@ export default function Scheduler() {
       </Grid>
 
       {selectedShift && (
-        <Paper sx={{ p: 2, mt: 3 }}>
+        <Paper sx={{ p: 2, mt: 3, background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)' }}>
           <Typography variant="subtitle1" sx={{ mb: 1 }}>
             Selected Shift Preview
           </Typography>
@@ -373,9 +406,9 @@ export default function Scheduler() {
         </Typography>
       )}
 
-      <Dialog open={showConflictDialog} onClose={() => setShowConflictDialog(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Employees Already Assigned</DialogTitle>
-        <DialogContent dividers>
+      <Dialog open={showConflictDialog} onClose={() => setShowConflictDialog(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)' } }}>
+        <DialogTitle sx={{ color: 'var(--text)', fontWeight: 700 }}>Employees Already Assigned</DialogTitle>
+        <DialogContent dividers sx={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}>
           <Typography variant="body2" sx={{ mb: 1 }}>
             The following employee(s) already have a shift. Do you want to override and assign the new shift?
           </Typography>
@@ -387,7 +420,7 @@ export default function Scheduler() {
             ))}
           </List>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ background: 'var(--card)', borderTop: '1px solid var(--border)' }}>
           <Button onClick={() => { setShowConflictDialog(false); setForceAssign(false) }}>
             Cancel
           </Button>
@@ -405,9 +438,9 @@ export default function Scheduler() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={showRemoveDialog} onClose={() => setShowRemoveDialog(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Confirm Removal</DialogTitle>
-        <DialogContent dividers>
+      <Dialog open={showRemoveDialog} onClose={() => setShowRemoveDialog(false)} maxWidth="sm" fullWidth PaperProps={{ sx: { background: 'var(--card)', color: 'var(--text)', border: '1px solid var(--border)' } }}>
+        <DialogTitle sx={{ color: 'var(--text)', fontWeight: 700 }}>Confirm Removal</DialogTitle>
+        <DialogContent dividers sx={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}>
           <Typography variant="body2" sx={{ mb: 1 }}>
             {removeMode === 'shift'
               ? `End selected shift for ${selectedEmployeeIDs.length} employee(s) as of ${effectiveTo || 'today'}?`
@@ -421,12 +454,12 @@ export default function Scheduler() {
             ))}
             {selectedEmployeeIDs.length > 5 && (
               <ListItem sx={{ py: 0.3, color: 'text.secondary' }}>
-                …and {selectedEmployeeIDs.length - 5} more
+                ...and {selectedEmployeeIDs.length - 5} more
               </ListItem>
             )}
           </List>
         </DialogContent>
-        <DialogActions>
+        <DialogActions sx={{ background: 'var(--card)', borderTop: '1px solid var(--border)' }}>
           <Button onClick={() => setShowRemoveDialog(false)}>
             Cancel
           </Button>
@@ -445,3 +478,4 @@ export default function Scheduler() {
     </Box>
   )
 }
+

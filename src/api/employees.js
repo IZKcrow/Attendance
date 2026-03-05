@@ -33,8 +33,7 @@ export async function updateEmployee(emp) {
 
 export async function deleteEmployee(id) {
   const res = await fetch(`${BASE}/employees/${id}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error(`Delete failed: ${res.status}`)
-  return true
+  return handleRes(res)
 }
 
 export default { fetchEmployees, createEmployee, updateEmployee, deleteEmployee }

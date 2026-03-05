@@ -43,7 +43,22 @@ const OTHER_ITEMS = [
 export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, onLogout }) {
   const [openSchedule, setOpenSchedule] = React.useState(false)
   const [openAttendance, setOpenAttendance] = React.useState(false)
-  const textColor = '#f5f5f5'
+  const textColor = 'var(--sidebar-text, #f5f5f5)'
+  const selectedSx = {
+    '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)' },
+    '&.Mui-selected:hover': { backgroundColor: 'rgba(255,255,255,0.25)' }
+  }
+  const topLevelButtonSx = {
+    justifyContent: expanded ? 'flex-start' : 'center',
+    py: 2,
+    ...selectedSx
+  }
+  const childButtonSx = {
+    pl: expanded ? 6 : 2,
+    py: 1.2,
+    justifyContent: expanded ? 'flex-start' : 'center',
+    ...selectedSx
+  }
 
   return (
     <Drawer
@@ -73,12 +88,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
             <ListItemButton
               onClick={() => onMenuClick(item.id)}
               selected={activeMenu === item.id}
-              sx={{
-                justifyContent: expanded ? 'flex-start' : 'center',
-                py: 2,
-                '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)' },
-                '&.Mui-selected:hover': { backgroundColor: 'rgba(255,255,255,0.25)' }
-              }}
+              sx={topLevelButtonSx}
             >
               <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 40 : 'auto' }}>
                 <item.icon />
@@ -114,13 +124,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
               <ListItemButton
                 onClick={() => onMenuClick(item.id)}
                 selected={activeMenu === item.id}
-                sx={{
-                  pl: expanded ? 6 : 2,
-                  py: 1.2,
-                  justifyContent: expanded ? 'flex-start' : 'center',
-                  '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)' },
-                  '&.Mui-selected:hover': { backgroundColor: 'rgba(255,255,255,0.25)' }
-                }}
+                sx={childButtonSx}
               >
                 <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 32 : 'auto' }}>
                   <item.icon fontSize="small" />
@@ -157,13 +161,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
               <ListItemButton
                 onClick={() => onMenuClick(item.id)}
                 selected={activeMenu === item.id}
-                sx={{
-                  pl: expanded ? 6 : 2,
-                  py: 1.2,
-                  justifyContent: expanded ? 'flex-start' : 'center',
-                  '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)' },
-                  '&.Mui-selected:hover': { backgroundColor: 'rgba(255,255,255,0.25)' }
-                }}
+                sx={childButtonSx}
               >
                 <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 32 : 'auto' }}>
                   <item.icon fontSize="small" />
@@ -184,12 +182,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
             <ListItemButton
               onClick={() => onMenuClick(item.id)}
               selected={activeMenu === item.id}
-              sx={{
-                justifyContent: expanded ? 'flex-start' : 'center',
-                py: 2,
-                '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)' },
-                '&.Mui-selected:hover': { backgroundColor: 'rgba(255,255,255,0.25)' }
-              }}
+              sx={topLevelButtonSx}
             >
               <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 40 : 'auto' }}>
                 <item.icon />

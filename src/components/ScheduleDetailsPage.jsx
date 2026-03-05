@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react'
 import { TableCell, Dialog, DialogTitle, DialogContent, DialogActions, Button, Slide } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import { useSnackbar } from './ui/Snackbar'
 
 const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
@@ -20,6 +21,7 @@ const Transition = React.forwardRef(function Transition(props, ref) {
 })
 
 export default function ScheduleDetailsPage() {
+  const { show, SnackbarComponent } = useSnackbar()
   const [periods, setPeriods] = useState([])
   const [periodLoading, setPeriodLoading] = useState(true)
   const [periodError, setPeriodError] = useState(null)
@@ -32,6 +34,7 @@ export default function ScheduleDetailsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [confirmDeletePeriod, setConfirmDeletePeriod] = useState(null)
 
   useEffect(() => {
     loadPeriods()
@@ -178,8 +181,37 @@ export default function ScheduleDetailsPage() {
     return Array.from(new Set(mapped)).join('-')
   }
 
+  const getPeriodId = (row) => row?.SchedulePeriodID || row?.ShiftID || row?.PeriodID || row?.id || null
+
+  const handleDeletePeriod = async (id) => {
+    if (!id) {
+      show('Delete failed: Missing schedule period ID.', 'error')
+      return
+    }
+    const target = periods.find((p) => getPeriodId(p) === id)
+    setConfirmDeletePeriod(target || { SchedulePeriodID: id, PeriodName: 'this schedule period' })
+  }
+
+  const confirmDelete = async () => {
+    const id = getPeriodId(confirmDeletePeriod)
+    if (!id) {
+      show('Delete failed: Missing schedule period ID.', 'error')
+      return
+    }
+    try {
+      await api.deleteSchedulePeriod(id)
+      setPeriods((prev) => prev.filter((p) => getPeriodId(p) !== id))
+      if (getPeriodId(selectedPeriod) === id) setSelectedPeriod(null)
+      setConfirmDeletePeriod(null)
+      show('Schedule period deleted successfully.', 'success')
+    } catch (err) {
+      show(`Delete failed: ${err?.message || err}`, 'error')
+    }
+  }
+
   return (
     <div className="schedule-wrapper">
+      {SnackbarComponent}
       <div className="schedule-card" style={{ marginBottom: 20 }}>
         <div className="schedule-header">
           <h2 className="schedule-title">Schedule Periods</h2>
@@ -211,9 +243,11 @@ export default function ScheduleDetailsPage() {
           error={periodError}
           primaryKeyField="SchedulePeriodID"
           readOnly={true}
-          allowDelete={false}
+          allowDelete={true}
           allowAdd={false}
           allowEdit={false}
+          useDeleteDialog={false}
+          onDelete={handleDeletePeriod}
           onRowClick={(row) => setSelectedPeriod(row)}
           renderRow={(row) => (
             <>
@@ -411,6 +445,29 @@ export default function ScheduleDetailsPage() {
             }}
           >
             Close
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={!!confirmDeletePeriod}
+        onClose={() => setConfirmDeletePeriod(null)}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ className: 'schedule-dialog' }}
+      >
+        <DialogTitle sx={{ color: 'var(--text)', fontWeight: 700 }}>Confirm Deletion</DialogTitle>
+        <DialogContent dividers sx={{ borderColor: 'var(--border)', background: 'var(--surface)', color: 'var(--text)' }}>
+          Delete <strong>{confirmDeletePeriod?.PeriodName || 'this schedule period'}</strong>? This action cannot be undone.
+        </DialogContent>
+        <DialogActions sx={{ background: 'var(--card)', borderTop: '1px solid var(--border)' }}>
+          <Button onClick={() => setConfirmDeletePeriod(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={confirmDelete}
+          >
+            Delete
           </Button>
         </DialogActions>
       </Dialog>
