@@ -90,6 +90,21 @@ function groupByDate(records) {
   return map
 }
 
+function getRecordDateKey(r, fallback = new Date()) {
+  const raw =
+    r?.NormalizedDate ||
+    r?.AttendanceDate ||
+    r?.AttendanceDay ||
+    r?.CreatedAt ||
+    r?.date ||
+    r?.attendance_date ||
+    r?.Date ||
+    fallback
+
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10)
+  return toDateStr(raw)
+}
+
 function enrichToday(records, opts = {}) {
   const now = opts.now ? new Date(opts.now) : new Date()
   const todayStr = toDateStr(now)
@@ -128,6 +143,51 @@ function enrichToday(records, opts = {}) {
 
     return { ...r, flags: { onTime, late, absent, earlyLeave, incomplete } }
   })
+}
+
+function computeComparisonStats(records, refNow = new Date()) {
+  const enriched = enrichToday(records, { now: refNow })
+  let onTime = 0
+  let late = 0
+  let absent = 0
+
+  for (let i = 0; i < records.length; i += 1) {
+    const raw = records[i] || {}
+    const flags = enriched[i]?.flags || {}
+    const summary = String(
+      raw.AttendanceSummary ||
+      raw.attendanceSummary ||
+      raw.Status ||
+      raw.status ||
+      ''
+    ).toLowerCase()
+    const hasAnyLog = !!(raw.MorningTimeIn || raw.MorningTimeOut || raw.AfternoonTimeIn || raw.AfternoonTimeOut)
+
+    if (summary.includes('absent') || flags.absent) {
+      absent += 1
+      continue
+    }
+    if (summary.includes('late') || (raw.MinutesLate || 0) > 0 || flags.late) {
+      late += 1
+      continue
+    }
+    if (
+      summary.includes('on-time') ||
+      summary.includes('on time') ||
+      summary.includes('on_time') ||
+      summary.includes('ontime') ||
+      summary.includes('present') ||
+      flags.onTime ||
+      (!summary && hasAnyLog && !flags.late)
+    ) {
+      onTime += 1
+      continue
+    }
+
+    if (!hasAnyLog) absent += 1
+  }
+
+  return { onTime, late, absent, totalLogs: records.length }
 }
 
 export default function OverviewDashboard({ onOpenAttendance }) {
@@ -351,27 +411,33 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     return rows
   }, [deptAttendance.ranked, deptQuery, deptSort])
 
-  // Comparison chart (last 14 days on-time rate)
+  // Comparison chart (last 14 days): On-time vs Late vs Absent
   const comparisonData = React.useMemo(() => {
-    const map = groupByDate(overviewRecords)
     const days = Array.from({ length: 14 }).map((_, idx) => {
       const d = new Date()
       d.setDate(d.getDate() - (13 - idx))
       return d
     })
-    const rates = days.map(dayObj => {
+    const dayStats = days.map(dayObj => {
       const key = toDateStr(dayObj)
-      const recs = map.get(key) || []
-      if (!recs.length) return 0
-      const enriched = enrichToday(recs, { now })
-      const onTime = enriched.filter(r => r.flags.onTime).length
-      return Math.round((onTime / recs.length) * 100)
+      const recs = overviewRecords.filter((r) => getRecordDateKey(r) === key)
+      if (!recs.length) return { onTime: 0, late: 0, absent: 0, totalLogs: 0 }
+      const refNow = key === todayStr
+        ? now
+        : new Date(dayObj.getFullYear(), dayObj.getMonth(), dayObj.getDate(), 23, 59, 59)
+      return computeComparisonStats(recs, refNow)
     })
     const labels = days.map(d =>
       d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     )
-    return { labels, rates }
-  }, [overviewRecords, now])
+    const pct = (num, total) => (total > 0 ? Math.round((num / total) * 100) : 0)
+    return {
+      labels,
+      onTimeRates: dayStats.map((s) => pct(s.onTime, s.totalLogs)),
+      lateRates: dayStats.map((s) => pct(s.late, s.totalLogs)),
+      absentRates: dayStats.map((s) => pct(s.absent, s.totalLogs))
+    }
+  }, [overviewRecords, now, todayStr])
 
   const recentLogs = React.useMemo(() => getRecentLogs(todayRecords), [todayRecords])
   const employeeDeptById = React.useMemo(() => {
@@ -440,19 +506,37 @@ export default function OverviewDashboard({ onOpenAttendance }) {
                     datasets: [
                       {
                         label: 'On-time %',
-                        data: comparisonData.rates,
+                        data: comparisonData.onTimeRates,
                         borderColor: accent.primary,
                         backgroundColor: 'rgba(0,144,99,0.18)',
                         tension: 0.4,
-                        fill: true,
-                        pointRadius: 4
+                        fill: false,
+                        pointRadius: 3
+                      },
+                      {
+                        label: 'Late %',
+                        data: comparisonData.lateRates,
+                        borderColor: accent.warning,
+                        backgroundColor: 'rgba(180,83,9,0.18)',
+                        tension: 0.35,
+                        fill: false,
+                        pointRadius: 2
+                      },
+                      {
+                        label: 'Absent %',
+                        data: comparisonData.absentRates,
+                        borderColor: accent.danger,
+                        backgroundColor: 'rgba(185,28,28,0.18)',
+                        tension: 0.35,
+                        fill: false,
+                        pointRadius: 2
                       }
                     ]
                   }}
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
+                    plugins: { legend: { display: true, labels: { color: accent.text, boxWidth: 10 } } },
                     scales: {
                       y: { beginAtZero: true, max: 100, ticks: { color: accent.text, callback: v => `${v}%` }, grid: { color: `${accent.border}55` } },
                       x: { ticks: { color: accent.text, maxTicksLimit: 7 }, grid: { color: `${accent.border}22` } }
