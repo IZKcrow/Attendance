@@ -16,13 +16,15 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
     name: '',
     position: '',
     department: '',
+    biometricStaffCode: '',
+    biometricUserId: '',
     email: '',
     phone: ''
   }))
 
   React.useEffect(() => {
     if (initial) setForm(initial)
-    else setForm({ id: null, name: '', position: '', department: '', email: '', phone: '' })
+    else setForm({ id: null, name: '', position: '', department: '', biometricStaffCode: '', biometricUserId: '', email: '', phone: '' })
   }, [initial, open])
 
   const handleChange = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
@@ -45,6 +47,12 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField fullWidth label="Department" value={form.department} onChange={handleChange('department')} />
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <TextField fullWidth label="Biometric Staff Code" value={form.biometricStaffCode || ''} onChange={handleChange('biometricStaffCode')} />
+          </Grid>
+          <Grid item xs={12} sm={6}>
+            <TextField fullWidth label="Biometric User ID" value={form.biometricUserId || ''} onChange={handleChange('biometricUserId')} />
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField fullWidth label="Email" value={form.email} onChange={handleChange('email')} />

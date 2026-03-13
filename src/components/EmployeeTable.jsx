@@ -92,6 +92,8 @@ function EmployeeRow({ e, onEdit, onDelete, onView }) {
       </TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.position}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.department}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricStaffCode || '—'}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricUserId || '—'}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.assignedShift || 'N/A'}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.phone}</TableCell>
       <TableCell align="right">
@@ -153,7 +155,10 @@ export default function EmployeeTable() {
       !q ||
       e.name.toLowerCase().includes(q) ||
       e.position.toLowerCase().includes(q) ||
-      (e.assignedShift || '').toLowerCase().includes(q)
+      (e.assignedShift || '').toLowerCase().includes(q) ||
+      String(e.biometricStaffCode || '').toLowerCase().includes(q) ||
+      String(e.biometricUserId || '').toLowerCase().includes(q) ||
+      String(e.EmployeeCode || e.employeeCode || '').toLowerCase().includes(q)
     const matchesDept = department === 'All' || e.department === department
     return matchesQuery && matchesDept
   })
@@ -270,6 +275,8 @@ export default function EmployeeTable() {
               <TableCell>Employee</TableCell>
               <TableCell>Position</TableCell>
               <TableCell>Department</TableCell>
+              <TableCell>Staff Code</TableCell>
+              <TableCell>User ID</TableCell>
               <TableCell>Assigned Shift</TableCell>
               <TableCell>Phone</TableCell>
               <TableCell align="right">Actions</TableCell>
@@ -278,7 +285,7 @@ export default function EmployeeTable() {
           <TableBody>
             {loading && (
               <TableRow>
-                <TableCell colSpan={6} align="center">Loading...</TableCell>
+                <TableCell colSpan={8} align="center">Loading...</TableCell>
               </TableRow>
             )}
             {!loading && filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map(e => (
@@ -286,7 +293,7 @@ export default function EmployeeTable() {
             ))}
             {!loading && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} align="center">No employees found</TableCell>
+                <TableCell colSpan={8} align="center">No employees found</TableCell>
               </TableRow>
             )}
           </TableBody>

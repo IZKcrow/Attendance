@@ -105,6 +105,18 @@ function getRecordDateKey(r, fallback = new Date()) {
   return toDateStr(raw)
 }
 
+function hhmmToMinutes(v) {
+  if (!v) return null
+  const s = String(v).trim()
+  const m = s.match(/^(\d{1,2}):(\d{2})/)
+  if (!m) return null
+  const hh = Number(m[1])
+  const mm = Number(m[2])
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null
+  return hh * 60 + mm
+}
+
 function enrichToday(records, opts = {}) {
   const now = opts.now ? new Date(opts.now) : new Date()
   const todayStr = toDateStr(now)
@@ -167,7 +179,19 @@ function computeComparisonStats(records, refNow = new Date()) {
       absent += 1
       continue
     }
-    if (summary.includes('late') || (raw.MinutesLate || 0) > 0 || flags.late) {
+
+    // Backend /attendance/range can label "Incomplete" while still having a late IN time (day in progress).
+    // Detect lateness directly from IN times vs required IN + grace, if those fields exist.
+    const grace = Number(raw.GracePeriodMinutes ?? raw.gracePeriodMinutes ?? 0) || 0
+    const minMorningIn = hhmmToMinutes(raw.MorningTimeIn)
+    const minReqMorningIn = hhmmToMinutes(raw.RequiredMorningIn)
+    const minAfternoonIn = hhmmToMinutes(raw.AfternoonTimeIn)
+    const minReqAfternoonIn = hhmmToMinutes(raw.RequiredAfternoonIn)
+    const lateByTimes =
+      (minMorningIn !== null && minReqMorningIn !== null && minMorningIn > (minReqMorningIn + grace)) ||
+      (minAfternoonIn !== null && minReqAfternoonIn !== null && minAfternoonIn > (minReqAfternoonIn + grace))
+
+    if (summary.includes('late') || lateByTimes || (raw.MinutesLate || 0) > 0 || flags.late) {
       late += 1
       continue
     }
@@ -223,7 +247,7 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     try {
       setLoadingOverview(true)
       const today = new Date()
-      const from = toDateStr(new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000))
+      const from = toDateStr(new Date(today.getTime() - 13 * 24 * 60 * 60 * 1000))
       const to = toDateStr(today)
       const attData = await api.fetchAttendanceByRange(from, to)
       const arr = Array.isArray(attData) ? attData : []
@@ -430,12 +454,14 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     const labels = days.map(d =>
       d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     )
-    const pct = (num, total) => (total > 0 ? Math.round((num / total) * 100) : 0)
+    // Use 1 decimal place so small values (e.g. 3/800 = 0.4%) don't round down to 0.
+    const pct1 = (num, total) => (total > 0 ? Math.round((num / total) * 1000) / 10 : 0)
     return {
       labels,
-      onTimeRates: dayStats.map((s) => pct(s.onTime, s.totalLogs)),
-      lateRates: dayStats.map((s) => pct(s.late, s.totalLogs)),
-      absentRates: dayStats.map((s) => pct(s.absent, s.totalLogs))
+      dayStats,
+      onTimeRates: dayStats.map((s) => pct1(s.onTime, s.totalLogs)),
+      lateRates: dayStats.map((s) => pct1(s.late, s.totalLogs)),
+      absentRates: dayStats.map((s) => pct1(s.absent, s.totalLogs))
     }
   }, [overviewRecords, now, todayStr])
 
@@ -536,7 +562,27 @@ export default function OverviewDashboard({ onOpenAttendance }) {
                   options={{
                     responsive: true,
                     maintainAspectRatio: false,
-                    plugins: { legend: { display: true, labels: { color: accent.text, boxWidth: 10 } } },
+                    plugins: {
+                      legend: { display: true, labels: { color: accent.text, boxWidth: 10 } },
+                      tooltip: {
+                        callbacks: {
+                          label: (ctx) => {
+                            const i = ctx.dataIndex
+                            const stats = comparisonData.dayStats?.[i] || { onTime: 0, late: 0, absent: 0, totalLogs: 0 }
+                            const label = String(ctx.dataset?.label || '').toLowerCase()
+                            const pctVal = typeof ctx.parsed?.y === 'number' ? ctx.parsed.y : ctx.raw
+                            const pctStr = Number.isFinite(pctVal) ? `${pctVal}%` : `${ctx.raw}%`
+                            const total = stats.totalLogs || 0
+                            const count = label.includes('late')
+                              ? stats.late
+                              : label.includes('absent')
+                                ? stats.absent
+                                : stats.onTime
+                            return `${ctx.dataset.label}: ${pctStr} (${count}/${total})`
+                          }
+                        }
+                      }
+                    },
                     scales: {
                       y: { beginAtZero: true, max: 100, ticks: { color: accent.text, callback: v => `${v}%` }, grid: { color: `${accent.border}55` } },
                       x: { ticks: { color: accent.text, maxTicksLimit: 7 }, grid: { color: `${accent.border}22` } }

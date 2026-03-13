@@ -14,6 +14,7 @@ import { useSnackbar } from './ui/Snackbar'
 export default function GenericDataTable({
   title,
   columns,
+  formColumns = null,
   data,
   loading,
   error,
@@ -32,6 +33,7 @@ export default function GenericDataTable({
 }) {
   const { show, SnackbarComponent } = useSnackbar()
   const showActions = allowEdit || allowDelete
+  const dialogColumns = React.useMemo(() => (Array.isArray(formColumns) ? formColumns : columns), [formColumns, columns])
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editing, setEditing] = React.useState(null)
   const [form, setForm] = React.useState({})
@@ -273,7 +275,7 @@ export default function GenericDataTable({
         <DialogTitle>{editing ? 'Edit' : 'Add New'}</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
-            {columns.map(col => (
+            {dialogColumns.map(col => (
               <TextField
                 key={col}
                 fullWidth

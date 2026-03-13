@@ -32,6 +32,7 @@ const SCHEDULE_GROUP = [
 const ATTENDANCE_GROUP = [
   { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
   { id: 'attendance-report', label: 'Attendance Report', icon: AssignmentIcon },
+  { id: 'device-attendance-events', label: 'Imported Logs', icon: HistoryIcon },
   { id: 'biometric', label: 'Biometric Scans', icon: VisibilityIcon }
 ]
 
@@ -202,7 +203,6 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
           <ListItemButton
             onClick={() => {
               onLogout?.()
-              onMenuClick?.('overview')
             }}
             sx={{
               justifyContent: expanded ? 'flex-start' : 'center',

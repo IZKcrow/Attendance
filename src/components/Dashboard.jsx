@@ -14,6 +14,7 @@ import Scheduler from './Scheduler'
 import UsersPage from './UsersPage'
 import AttendanceRecordsPage from './AttendanceRecordsPage'
 import BiometricScansPage from './BiometricScansPage'
+import DeviceAttendanceEventsPage from './DeviceAttendanceEventsPage'
 import ScheduleDetailsPage from './ScheduleDetailsPage'
 import AuditLogsPage from './AuditLogsPage'
 import SpecialDaysPage from './SpecialDaysPage'
@@ -23,16 +24,82 @@ import AttendanceReportPage from './AttendanceReportPage'
 
 import bg2 from '../styles/bg2.png'
 
+const PAGE_TO_PATH = {
+  overview: '/dashboard',
+  employees: '/employees',
+  users: '/users',
+  devices: '/devices',
+  'schedule-details': '/schedule-details',
+  schedule: '/scheduler',
+  attendance: '/attendance',
+  'attendance-report': '/attendance-report',
+  'device-attendance-events': '/imported-logs',
+  biometric: '/biometric',
+  'special-days': '/special-days',
+  'audit-logs': '/audit-logs'
+}
+
+const PATH_TO_PAGE = Object.fromEntries(
+  Object.entries(PAGE_TO_PATH).map(([page, path]) => [path, page])
+)
+
+const normalizePath = (path) => {
+  if (!path) return '/'
+  const cleaned = path.replace(/\/+$/, '')
+  return cleaned || '/'
+}
+
+const getPageFromPath = (pathname) => {
+  const normalized = normalizePath(pathname).toLowerCase()
+  if (normalized === '/') return 'overview'
+  return PATH_TO_PAGE[normalized] || 'overview'
+}
+
 export default function Dashboard({ onLogout }) {
-  const [currentPage, setCurrentPage] = React.useState('overview')
+  const [currentPage, setCurrentPage] = React.useState(() => {
+    if (typeof window === 'undefined') return 'overview'
+    return getPageFromPath(window.location.pathname)
+  })
   const [sidebarExpanded, setSidebarExpanded] = React.useState(false)
+
+  const navigateToPage = React.useCallback((page, options = {}) => {
+    const nextPage = PAGE_TO_PATH[page] ? page : 'overview'
+    const nextPath = PAGE_TO_PATH[nextPage]
+    setCurrentPage(nextPage)
+    if (typeof window === 'undefined') return
+    const currentPath = normalizePath(window.location.pathname)
+    if (currentPath !== nextPath) {
+      const fn = options.replace ? 'replaceState' : 'pushState'
+      window.history[fn]({}, '', nextPath)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const syncFromUrl = () => {
+      setCurrentPage(getPageFromPath(window.location.pathname))
+    }
+
+    syncFromUrl()
+    window.addEventListener('popstate', syncFromUrl)
+    return () => window.removeEventListener('popstate', syncFromUrl)
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return
+    const pageFromPath = getPageFromPath(window.location.pathname)
+    if (pageFromPath !== currentPage) {
+      navigateToPage(currentPage, { replace: true })
+    }
+  }, [currentPage, navigateToPage])
 
   const renderPage = () => {
     switch (currentPage) {
       case 'employees':
         return <EmployeeTable />
       case 'overview':
-        return <OverviewDashboard onOpenAttendance={() => setCurrentPage('attendance')} />
+        return <OverviewDashboard onOpenAttendance={() => navigateToPage('attendance')} />
       case 'users':
         return <UsersPage />
       case 'devices':
@@ -43,6 +110,8 @@ export default function Dashboard({ onLogout }) {
         return <AttendanceRecordsPage />
       case 'attendance-report':
         return <AttendanceReportPage />
+      case 'device-attendance-events':
+        return <DeviceAttendanceEventsPage />
       case 'biometric':
         return <BiometricScansPage />
       case 'special-days':
@@ -86,7 +155,7 @@ export default function Dashboard({ onLogout }) {
       <Sidebar
         expanded={sidebarExpanded}
         activeMenu={currentPage}
-        onMenuClick={setCurrentPage}
+        onMenuClick={navigateToPage}
         onHover={(open) => setSidebarExpanded(open)}
         onLogout={onLogout}
       />

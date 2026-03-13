@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+﻿const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 
 function buildApiError(res, text) {
   let payload = null
@@ -217,9 +217,11 @@ export async function createDevice({
   deviceName,
   deviceType = null,
   serialNumber = null,
-  locationName = null,
-  latitude = null,
-  longitude = null,
+  ipAddress = null,
+  port = null,
+  machineId = null,
+  commPort = null,
+  devicePassword = null,
   isActive = true,
   registeredBy = null
 }) {
@@ -228,18 +230,23 @@ export async function createDevice({
     DeviceName: deviceName,
     DeviceType: deviceType,
     SerialNumber: serialNumber,
-    LocationName: locationName,
-    Latitude: latitude,
-    Longitude: longitude,
+    IPAddress: ipAddress,
+    Port: port,
+    MachineID: machineId,
+    CommPort: commPort,
+    DevicePassword: devicePassword,
     IsActive: isActive,
     RegisteredBy: registeredBy
   })
 }
+
 export async function registerDeviceConnection({
   deviceCode,
   deviceName = null,
   deviceType = 'KIOSK',
   serialNumber = null,
+  ipAddress = null,
+  port = null,
   locationName = null,
   latitude = null,
   longitude = null,
@@ -250,6 +257,8 @@ export async function registerDeviceConnection({
     DeviceName: deviceName,
     DeviceType: deviceType,
     SerialNumber: serialNumber,
+    IPAddress: ipAddress,
+    Port: port,
     LocationName: locationName,
     Latitude: latitude,
     Longitude: longitude,
@@ -263,6 +272,71 @@ export async function sendDeviceHeartbeat({ deviceCode = null, deviceID = null, 
     DeviceID: deviceID,
     Actor: actor
   })
+}
+
+export async function testDeviceConnection({ deviceCode = null, ipAddress = null, port = null }) {
+  return createRecord('devices/test-connection', {
+    DeviceCode: deviceCode,
+    IPAddress: ipAddress,
+    Port: port
+  })
+}
+function getFilenameFromContentDisposition(value) {
+  if (!value) return null
+  // Basic support for: attachment; filename="file.csv"
+  const match = String(value).match(/filename\s*=\s*\"?([^\";]+)\"?/i)
+  return match ? match[1] : null
+}
+
+export async function exportDeviceLogsCsv({ deviceCode, from = null, to = null }) {
+  const res = await fetch(`${BASE}/devices/export-logs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      DeviceCode: deviceCode,
+      From: from,
+      To: to
+    })
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw buildApiError(res, text)
+  }
+
+  const blob = await res.blob()
+  const filename = getFilenameFromContentDisposition(res.headers.get('content-disposition')) || 'device-logs.csv'
+  return { blob, filename }
+}
+
+export async function importDeviceAttendanceCsv({
+  deviceCode,
+  csvText,
+  createMissingEmployees = false,
+  overwriteExisting = false
+}) {
+  const res = await fetch(`${BASE}/devices/import-attendance-csv`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      DeviceCode: deviceCode,
+      CsvText: csvText,
+      CreateMissingEmployees: !!createMissingEmployees,
+      OverwriteExisting: !!overwriteExisting
+    })
+  })
+  return handleRes(res)
+}
+
+export async function fetchDeviceAttendanceEvents({ deviceCode = null, from = null, to = null, top = 500 } = {}) {
+  const params = new URLSearchParams()
+  if (deviceCode) params.set('deviceCode', deviceCode)
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  if (top) params.set('top', String(top))
+  const qs = params.toString()
+  const res = await fetch(`${BASE}/device-attendance-events${qs ? `?${qs}` : ''}`)
+  return handleRes(res)
 }
 export async function fetchBiometricScans() {
   return fetchAll('biometric-scans')
@@ -425,4 +499,8 @@ export async function removeShiftAssignments({
   }
   return createRecord('shift-assignments/remove', payload)
 }
+
+
+
+
 
