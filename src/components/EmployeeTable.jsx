@@ -1,4 +1,4 @@
-//EmployeeTable.jsx
+﻿//EmployeeTable.jsx
 import React from 'react'
 import {
   Table,
@@ -26,6 +26,7 @@ import {
   Button,
   Typography,
   Chip,
+  Checkbox,
   Grid
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
@@ -38,15 +39,12 @@ import { fetchEmployeeAssignments } from '../api'
 import { useSnackbar } from './ui/Snackbar'
 
 function formatSqlTime(value) {
-  if (!value) return '—'
+  if (!value) return 'â€”'
   if (typeof value === 'string') {
-    // "08:00:00" or "08:00"
     if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
-    // ISO datetime -> grab local-less HH:MM
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value.slice(11, 16)
     return value
   }
-  // Fallback: non-string values
   try {
     const d = new Date(value)
     if (!Number.isNaN(d.getTime())) return d.toISOString().slice(11, 16)
@@ -55,7 +53,7 @@ function formatSqlTime(value) {
 }
 
 function formatDayList(value) {
-  if (!value) return '—'
+  if (!value) return 'â€”'
   return String(value)
     .split(',')
     .map((s) => s.trim())
@@ -63,16 +61,25 @@ function formatDayList(value) {
     .join(', ')
 }
 
-function EmployeeRow({ e, onEdit, onDelete, onView }) {
+function EmployeeRow({ e, selected, onToggleSelect, onEdit, onView }) {
   return (
     <TableRow
       hover
+      selected={!!selected}
       onClick={() => onView?.(e)}
       sx={{
         cursor: onView ? 'pointer' : 'default',
         '&:hover': { background: 'rgba(255,255,255,0.04)' }
       }}
     >
+      <TableCell padding="checkbox" onClick={(ev) => ev.stopPropagation()}>
+        <Checkbox
+          checked={!!selected}
+          onChange={() => onToggleSelect?.(e.id)}
+          inputProps={{ 'aria-label': `select ${e.name || 'employee'}` }}
+          sx={{ color: 'var(--muted)', '&.Mui-checked': { color: 'var(--primary)' } }}
+        />
+      </TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>
         <Stack direction="row" spacing={2} alignItems="center">
           <Avatar sx={{ bgcolor: 'var(--primary)' }}>
@@ -92,8 +99,8 @@ function EmployeeRow({ e, onEdit, onDelete, onView }) {
       </TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.position}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.department}</TableCell>
-      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricStaffCode || '—'}</TableCell>
-      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricUserId || '—'}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricStaffCode || 'â€”'}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricUserId || 'â€”'}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.assignedShift || 'N/A'}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.phone}</TableCell>
       <TableCell align="right">
@@ -102,20 +109,16 @@ function EmployeeRow({ e, onEdit, onDelete, onView }) {
             <EditIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        <Tooltip title="Delete">
-          <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); onDelete && onDelete(e.id) }} sx={{ color: 'var(--muted)' }}>
-            <DeleteIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
       </TableCell>
     </TableRow>
   )
 }
 
 export default function EmployeeTable() {
-  const { show, SnackbarComponent } = useSnackbar()
+  const { show, hide, SnackbarComponent } = useSnackbar()
   const [query, setQuery] = React.useState('')
   const [department, setDepartment] = React.useState('All')
+  const [sortMode, setSortMode] = React.useState('STAFF_ASC')
   const [page, setPage] = React.useState(0)
   const [rowsPerPage, setRowsPerPage] = React.useState(8)
   const [employees, setEmployees] = React.useState([])
@@ -125,7 +128,8 @@ export default function EmployeeTable() {
   const [editing, setEditing] = React.useState(null)
   const [viewing, setViewing] = React.useState(null)
   const [viewLoading, setViewLoading] = React.useState(false)
-  const [deleteTarget, setDeleteTarget] = React.useState(null)
+  const [selectedIds, setSelectedIds] = React.useState(() => new Set())
+  const [deleting, setDeleting] = React.useState(false)
 
   const departments = React.useMemo(() => [
     'All',
@@ -149,27 +153,121 @@ export default function EmployeeTable() {
     return () => { mounted = false }
   }, [])
 
-  const filtered = employees.filter(e => {
-    const q = query.trim().toLowerCase()
-    const matchesQuery =
-      !q ||
-      e.name.toLowerCase().includes(q) ||
-      e.position.toLowerCase().includes(q) ||
-      (e.assignedShift || '').toLowerCase().includes(q) ||
-      String(e.biometricStaffCode || '').toLowerCase().includes(q) ||
-      String(e.biometricUserId || '').toLowerCase().includes(q) ||
-      String(e.EmployeeCode || e.employeeCode || '').toLowerCase().includes(q)
-    const matchesDept = department === 'All' || e.department === department
-    return matchesQuery && matchesDept
-  })
+  const nextStaffCode = React.useMemo(() => {
+    const parse = (v) => {
+      const s = String(v ?? '').trim()
+      if (!s) return null
+      const n = Number(s)
+      return Number.isFinite(n) ? n : null
+    }
+
+    const used = (Array.isArray(employees) ? employees : [])
+      .map((e) => parse(e.biometricStaffCode))
+      .filter((n) => n !== null && n >= 0 && n <= 100000)
+      .sort((a, b) => a - b)
+
+    let next = 0
+    for (const n of used) {
+      if (n === next) next += 1
+      else if (n > next) break
+    }
+
+    return next <= 100000 ? String(next) : ''
+  }, [employees])
+
+  const filtered = (Array.isArray(employees) ? employees : [])
+    .filter((e) => {
+      const q = query.trim().toLowerCase()
+      const matchesQuery =
+        !q ||
+        String(e.name || '').toLowerCase().includes(q) ||
+        String(e.position || '').toLowerCase().includes(q) ||
+        String(e.department || '').toLowerCase().includes(q) ||
+        String(e.assignedShift || '').toLowerCase().includes(q) ||
+        String(e.biometricStaffCode || '').toLowerCase().includes(q) ||
+        String(e.biometricUserId || '').toLowerCase().includes(q) ||
+        String(e.EmployeeCode || e.employeeCode || '').toLowerCase().includes(q)
+      const matchesDept = department === 'All' || e.department === department
+      return matchesQuery && matchesDept
+    })
+    .sort((a, b) => {
+      const parse = (v) => {
+        const s = String(v ?? '').trim()
+        if (!s) return null
+        const n = Number(s)
+        return Number.isFinite(n) ? n : null
+      }
+
+      const nameA = String(a.name || '')
+      const nameB = String(b.name || '')
+
+      const staffA = parse(a.biometricStaffCode)
+      const staffB = parse(b.biometricStaffCode)
+
+      const staffCmpAsc = (() => {
+        if (staffA === null && staffB === null) return 0
+        if (staffA === null) return 1
+        if (staffB === null) return -1
+        if (staffA !== staffB) return staffA - staffB
+        return 0
+      })()
+
+      const nameCmpAsc = nameA.localeCompare(nameB)
+
+      if (sortMode === 'NAME_ASC') return nameCmpAsc || staffCmpAsc
+      if (sortMode === 'NAME_DESC') return nameB.localeCompare(nameA) || staffCmpAsc
+
+      return staffCmpAsc || nameCmpAsc
+    })
+
+  const filteredIds = React.useMemo(() => filtered.map(e => e.id), [filtered])
+  const selectedCount = selectedIds.size
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every(id => selectedIds.has(id))
+  const someFilteredSelected = filteredIds.some(id => selectedIds.has(id))
+
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAllFiltered = () => {
+    if (!filteredIds.length) return
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      const currentlyAllSelected = filteredIds.every(id => next.has(id))
+      if (currentlyAllSelected) {
+        filteredIds.forEach(id => next.delete(id))
+      } else {
+        filteredIds.forEach(id => next.add(id))
+      }
+      return next
+    })
+  }
+
+  const clearSelection = () => setSelectedIds(new Set())
 
   const handleChangePage = (_, newPage) => setPage(newPage)
   const handleChangeRowsPerPage = (e) => {
     setRowsPerPage(parseInt(e.target.value, 10))
     setPage(0)
   }
-
-  const openAdd = () => { setEditing(null); setDialogOpen(true) }
+  const openAdd = () => {
+    setEditing({
+      id: null,
+      name: '',
+      position: '',
+      department: '',
+      biometricStaffCode: nextStaffCode,
+      biometricUserId: '',
+      email: '',
+      phone: ''
+    })
+    setDialogOpen(true)
+  }
   const openEdit = (emp) => { setEditing(emp); setDialogOpen(true) }
   const openView = async (emp) => {
     setViewing(emp)
@@ -203,21 +301,60 @@ export default function EmployeeTable() {
     }
   }
 
-  const askDelete = (emp) => {
-    setDeleteTarget(emp)
-  }
+  const performDelete = async (ids) => {
+    const list = Array.isArray(ids) ? ids.map(v => String(v || '').trim()).filter(Boolean) : []
+    if (!list.length || deleting) return
 
-  const handleDelete = async () => {
-    if (!deleteTarget?.id) return
+    setDeleting(true)
     try {
-      await api.deleteEmployee(deleteTarget.id)
-      setEmployees(prev => prev.filter(p => p.id !== deleteTarget.id))
-      show('Employee deleted.', 'success')
-      setDeleteTarget(null)
+      const result = await api.bulkDeleteEmployees(list)
+      const deletedCount = Number(result?.deleted ?? list.length)
+
+      const idSet = new Set(list)
+      setEmployees(prev => prev.filter(p => !idSet.has(p.id)))
+      setSelectedIds(prev => {
+        if (!prev.size) return prev
+        const next = new Set(prev)
+        list.forEach(id => next.delete(id))
+        return next
+      })
+
+      show(deletedCount === 1 ? 'Employee deleted.' : `${deletedCount} employees deleted.`, 'success')
+      setError(null)
     } catch (err) {
       setError(err.message)
       show(`${err.message || 'Delete failed'}`, 'error')
+    } finally {
+      setDeleting(false)
     }
+  }
+
+  const confirmDelete = (ids) => {
+    const list = Array.isArray(ids) ? ids : []
+    if (!list.length) return
+
+    const count = list.length
+    const label = count === 1 ? 'Delete this employee?' : `Delete ${count} employees?`
+
+    show(label, {
+      severity: 'warning',
+      autoHideDuration: null,
+      action: (
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Button color="inherit" size="small" onClick={() => hide()}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            size="small"
+            variant="contained"
+            onClick={() => { hide(); performDelete(list) }}
+          >
+            Delete
+          </Button>
+        </Stack>
+      )
+    })
   }
 
   return (
@@ -256,10 +393,57 @@ export default function EmployeeTable() {
               ))}
             </Select>
           </FormControl>
+
+          <FormControl size="small" sx={{ minWidth: 180 }}>
+            <InputLabel id="sort-label" sx={{ color: 'var(--text)' }}>Sort</InputLabel>
+            <Select
+              labelId="sort-label"
+              value={sortMode}
+              label="Sort"
+              onChange={(e) => { setSortMode(e.target.value); setPage(0) }}
+              sx={{ color: 'var(--text)' }}
+              MenuProps={{ PaperProps: { sx: { background: 'var(--surface)', color: 'var(--text)' } } }}
+            >
+              <MenuItem value="NAME_ASC">Name (A-Z)</MenuItem>
+              <MenuItem value="NAME_DESC">Name (Z-A)</MenuItem>
+              <MenuItem value="STAFF_ASC">By Number</MenuItem>
+            </Select>
+          </FormControl>
         </Box>
 
-        <Box>
-          <IconButton onClick={openAdd} sx={{ color: 'var(--primary)', background: 'rgba(37,99,235,0.12)', '&:hover': { background: 'rgba(37,99,235,0.2)' } }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {selectedCount > 0 && (
+            <Chip
+              label={`${selectedCount} selected`}
+              onDelete={clearSelection}
+              size="small"
+              sx={{
+                background: 'rgba(255,255,255,0.06)',
+                color: 'var(--text)',
+                borderColor: 'var(--border)'
+              }}
+              variant="outlined"
+            />
+          )}
+          <Tooltip title={selectedCount ? 'Delete selected' : 'Select employees to delete'}>
+            <span>
+              <IconButton
+                disabled={!selectedCount || deleting}
+                onClick={() => confirmDelete(Array.from(selectedIds))}
+                sx={{
+                  color: selectedCount ? '#ef4444' : 'var(--muted)',
+                  background: selectedCount ? 'rgba(239,68,68,0.12)' : 'rgba(255,255,255,0.04)',
+                  '&:hover': { background: selectedCount ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.06)' }
+                }}
+              >
+                <DeleteIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <IconButton
+            onClick={openAdd}
+            sx={{ color: 'var(--primary)', background: 'rgba(37,99,235,0.12)', '&:hover': { background: 'rgba(37,99,235,0.2)' } }}
+          >
             <AddIcon />
           </IconButton>
         </Box>
@@ -272,6 +456,19 @@ export default function EmployeeTable() {
         }}>
           <TableHead>
             <TableRow>
+              <TableCell padding="checkbox" sx={{ width: 48 }}>
+                <Checkbox
+                  checked={allFilteredSelected}
+                  indeterminate={someFilteredSelected && !allFilteredSelected}
+                  onChange={toggleSelectAllFiltered}
+                  inputProps={{ 'aria-label': 'select all employees' }}
+                  sx={{
+                    color: '#fff',
+                    '&.Mui-checked': { color: '#fff' },
+                    '&.MuiCheckbox-indeterminate': { color: '#fff' }
+                  }}
+                />
+              </TableCell>
               <TableCell>Employee</TableCell>
               <TableCell>Position</TableCell>
               <TableCell>Department</TableCell>
@@ -285,15 +482,22 @@ export default function EmployeeTable() {
           <TableBody>
             {loading && (
               <TableRow>
-                <TableCell colSpan={8} align="center">Loading...</TableCell>
+                <TableCell colSpan={9} align="center">Loading...</TableCell>
               </TableRow>
             )}
             {!loading && filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map(e => (
-              <EmployeeRow key={e.id} e={e} onEdit={openEdit} onDelete={() => askDelete(e)} onView={openView} />
+              <EmployeeRow
+                key={e.id}
+                e={e}
+                selected={selectedIds.has(e.id)}
+                onToggleSelect={toggleSelect}
+                onEdit={openEdit}
+                onView={openView}
+              />
             ))}
             {!loading && filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} align="center">No employees found</TableCell>
+                <TableCell colSpan={9} align="center">No employees found</TableCell>
               </TableRow>
             )}
           </TableBody>
@@ -322,19 +526,6 @@ export default function EmployeeTable() {
         employee={viewing}
         loading={viewLoading}
       />
-
-      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
-        <DialogTitle>Confirm Delete</DialogTitle>
-        <DialogContent dividers>
-          <Typography variant="body2">
-            Delete employee <strong>{deleteTarget?.name || 'this employee'}</strong>? This action cannot be undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
-          <Button variant="contained" color="error" onClick={handleDelete}>Delete</Button>
-        </DialogActions>
-      </Dialog>
     </>
   )
 }
@@ -342,7 +533,7 @@ export default function EmployeeTable() {
 function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
   if (!employee) return null
   const scheduleDetails = employee.scheduleDetails || employee.ScheduleDetails || []
-  const shiftName = employee.assignedShift || employee.AssignedShift || '—'
+  const shiftName = employee.assignedShift || employee.AssignedShift || 'â€”'
   const initials =
     (employee.name || '')
       .split(' ')
@@ -368,9 +559,9 @@ function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
         </Stack>
 
         <Grid container spacing={1.2} sx={{ mb: 2 }}>
-          <Detail label="Position" value={employee.position || '—'} />
-          <Detail label="Department" value={employee.department || '—'} />
-          <Detail label="Phone" value={employee.phone || '—'} />
+          <Detail label="Position" value={employee.position || 'â€”'} />
+          <Detail label="Department" value={employee.department || 'â€”'} />
+          <Detail label="Phone" value={employee.phone || 'â€”'} />
           <Detail label="Assigned Shift" value={shiftName} />
         </Grid>
 
@@ -378,7 +569,7 @@ function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
           Schedule Details
         </Typography>
         {loading ? (
-          <Typography variant="body2" sx={{ color: 'text.secondary' }}>Loading schedule details…</Typography>
+          <Typography variant="body2" sx={{ color: 'text.secondary' }}>Loading schedule detailsâ€¦</Typography>
         ) : Array.isArray(scheduleDetails) && scheduleDetails.length > 0 ? (
           <Stack spacing={1}>
             {scheduleDetails.slice(0, 2).map((s, idx) => (
@@ -387,7 +578,7 @@ function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
                   {s.PeriodName || s.name || s.ShiftName || `Pattern ${idx + 1}`}
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                  Days: {s.DayNameList || formatDayList(s.DayList) || '—'}
+                  Days: {s.DayNameList || formatDayList(s.DayList) || 'â€”'}
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                   Morning: {formatSqlTime(s.MorningTimeIn || s.morningIn)} - {formatSqlTime(s.MorningTimeOut || s.morningOut)}
@@ -399,7 +590,7 @@ function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
             ))}
             {scheduleDetails.length > 2 && (
               <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                …plus {scheduleDetails.length - 2} more pattern(s)
+                â€¦plus {scheduleDetails.length - 2} more pattern(s)
               </Typography>
             )}
           </Stack>
@@ -424,3 +615,8 @@ function Detail({ label, value }) {
     </Grid>
   )
 }
+
+
+
+
+

@@ -74,7 +74,10 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
           color: textColor,
           transition: 'width 0.12s ease-out',
           willChange: 'width',
-          overflow: 'hidden'
+          overflow: 'hidden',
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column'
         }
       }}
       onMouseEnter={() => onHover?.(true)}
@@ -83,7 +86,27 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
       <Box sx={{ p: 2, textAlign: 'center', fontWeight: 'bold', fontSize: '18px', color: textColor }}>
         {expanded ? 'Menu' : '☰'}
       </Box>
-      <List>
+      <Box
+        sx={{
+          flex: 1,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          scrollbarWidth: 'thin',
+          scrollbarColor: 'rgba(255,255,255,0.28) transparent',
+          '&::-webkit-scrollbar': { width: 8 },
+          '&::-webkit-scrollbar-track': { background: 'transparent' },
+          '&::-webkit-scrollbar-thumb': {
+            backgroundColor: 'rgba(255,255,255,0.22)',
+            borderRadius: 10,
+            border: '2px solid transparent',
+            backgroundClip: 'content-box'
+          },
+          '&::-webkit-scrollbar-thumb:hover': {
+            backgroundColor: 'rgba(255,255,255,0.35)'
+          }
+        }}
+      >
+        <List>
         {TOP_LEVEL.map(item => (
           <ListItem disablePadding key={item.id}>
             <ListItemButton
@@ -222,7 +245,8 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
             )}
           </ListItemButton>
         </ListItem>
-      </List>
+        </List>
+      </Box>
     </Drawer>
   )
 }

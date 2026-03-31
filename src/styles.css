@@ -1,18 +1,17 @@
 @import './styles/pages.css';
 
 :root {
-  /* Palette switch */
-  --bg: #d0d0d0;               /* light gray background */
-  --surface: rgba(229, 229, 229, 0.72);  /* cards/tables, slightly transparent */
+  --bg: #d0d0d0;
+  --surface: rgba(229, 229, 229, 0.72);
   --card: rgba(229, 229, 229, 0.72);
   --border: #c7cdd1;
-  --text: #323232;             /* dark text */
+  --text: #323232;
   --muted: #6b7280;
 
-  --secondary: #323232;        /* secondary (sidebar) */
+  --secondary: #323232;
   --secondary-dark: #1f1f1f;
 
-  --primary: #009063;          /* accent */
+  --primary: #009063;
   --primary-dark: #006b4b;
   --primary-light: #00a877;
 }
@@ -54,7 +53,6 @@ body {
   color: var(--text);
 }
 
-/* small responsive tweaks */
 @media (max-width: 600px) {
   .MuiTableCell-root {
     font-size: 13px;

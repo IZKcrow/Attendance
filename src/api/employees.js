@@ -36,4 +36,13 @@ export async function deleteEmployee(id) {
   return handleRes(res)
 }
 
-export default { fetchEmployees, createEmployee, updateEmployee, deleteEmployee }
+export async function bulkDeleteEmployees(ids) {
+  const res = await fetch(`${BASE}/employees/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  })
+  return handleRes(res)
+}
+
+export default { fetchEmployees, createEmployee, updateEmployee, deleteEmployee, bulkDeleteEmployees }

@@ -37,7 +37,7 @@ export default function Scheduler() {
   const [showConflictDialog, setShowConflictDialog] = useState(false)
   const [forceAssign, setForceAssign] = useState(false)
   const [showRemoveDialog, setShowRemoveDialog] = useState(false)
-  const [removeMode, setRemoveMode] = useState('shift') // 'shift' | 'all'
+  const [removeMode, setRemoveMode] = useState('shift')
   const [assignments, setAssignments] = useState([])
   const assignmentsTimer = React.useRef(null)
   const EMPLOYEE_PANEL_LIMIT = 25
@@ -68,7 +68,6 @@ export default function Scheduler() {
     [shifts, selectedShiftID]
   )
 
-  // Load current assignments for selected employees to show visibility and detect conflicts
   useEffect(() => {
     if (assignmentsTimer.current) clearTimeout(assignmentsTimer.current)
     if (!selectedEmployeeIDs.length) {
@@ -147,7 +146,6 @@ export default function Scheduler() {
 
   const handleAssign = async () => {
     if (!canSubmit) return
-    // Pre-flight: warn if selected employees already have an active shift
     if (!forceAssign) {
       try {
         const existing = await api.fetchEmployeeAssignments({ employeeIDs: selectedEmployeeIDs })
@@ -161,7 +159,6 @@ export default function Scheduler() {
           return
         }
       } catch (_) {
-        // if preflight fails, continue with main flow but surface a toast
         show('Could not check existing assignments; proceeding anyway.', 'warning')
       }
     }

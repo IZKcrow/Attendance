@@ -1,11 +1,6 @@
 ﻿// DevicesPage.jsx
-// Practical devices admin:
-// - Add a device (stores DeviceCode/Name/Type + IPAddress/Port)
-// - Register connection / Heartbeat (updates LastSeenAt)
-// - Test TCP reachability (calls POST /devices/test-connection)
-// - Export logs as CSV (calls POST /devices/export-logs)
 import React from 'react'
-import { TableCell } from '@mui/material'
+import { TableCell, Checkbox } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
 
@@ -16,6 +11,7 @@ export default function DevicesPage() {
   const [busyId, setBusyId] = React.useState(null)
   const [statusMsg, setStatusMsg] = React.useState('')
   const [lastRefreshedAt, setLastRefreshedAt] = React.useState(null)
+  const [selectedDeviceIds, setSelectedDeviceIds] = React.useState([])
   const importFileInputRef = React.useRef(null)
   const importTargetRef = React.useRef(null)
 
@@ -58,7 +54,10 @@ export default function DevicesPage() {
       if (!silent) setLoading(true)
       const data = await api.fetchDevices()
       if (!aliveRef || aliveRef()) {
-        setDevices(Array.isArray(data) ? data : [])
+        const list = Array.isArray(data) ? data : []
+        setDevices(list)
+        const present = new Set(list.map(d => d.DeviceID).filter(Boolean))
+        setSelectedDeviceIds((prev) => (Array.isArray(prev) ? prev.filter(id => present.has(id)) : []))
         setError(null)
         setLastRefreshedAt(new Date())
       }
@@ -74,19 +73,12 @@ export default function DevicesPage() {
       const registeredBy = 'UI_DEVICES'
       const ipAddress = String(form.IPAddress || '').trim()
       const port = form.Port === '' || form.Port === null || form.Port === undefined ? null : Number.parseInt(form.Port, 10)
-      const machineIdRaw = form.MachineID
-      let machineId = machineIdRaw === '' || machineIdRaw === null || machineIdRaw === undefined ? null : Number.parseInt(machineIdRaw, 10)
-      if (!Number.isInteger(machineId) || machineId <= 0) {
-        const fallback = Number.parseInt(String(form.DeviceCode || ''), 10)
-        if (Number.isInteger(fallback) && fallback > 0) machineId = fallback
-      }
-      if (!Number.isInteger(machineId) || machineId <= 0) throw new Error('MachineID is required (or make DeviceCode numeric).')
 
-      const commPortRaw = form.CommPort
-      const commPort = commPortRaw === '' || commPortRaw === null || commPortRaw === undefined ? 0 : Number.parseInt(commPortRaw, 10)
+      const machineId = Number.parseInt(String(form.DeviceCode || '').trim(), 10)
+      if (!Number.isInteger(machineId) || machineId <= 0) throw new Error('DeviceCode must be a numeric ID (used as MachineID).')
 
-      const pwdRaw = form.DevicePassword
-      const devicePassword = pwdRaw === '' || pwdRaw === null || pwdRaw === undefined ? 0 : Number.parseInt(pwdRaw, 10)
+      const commPort = 0
+      const devicePassword = 0
 
       if (!ipAddress) throw new Error('IPAddress is required.')
       if (Number.isNaN(port) || port === null) throw new Error('Port is required.')
@@ -109,6 +101,32 @@ export default function DevicesPage() {
       setError(null)
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const handleEdit = async (updated) => {
+    const deviceID = updated?.DeviceID
+    if (!deviceID) throw new Error('Missing DeviceID')
+
+    setBusyId(deviceID)
+    try {
+      const portRaw = updated.Port
+      const port = portRaw === '' || portRaw === null || portRaw === undefined ? null : Number.parseInt(portRaw, 10)
+
+      await api.updateDevice(deviceID, {
+        DeviceName: updated.DeviceName,
+        DeviceType: updated.DeviceType,
+        SerialNumber: updated.SerialNumber,
+        IPAddress: updated.IPAddress,
+        Port: Number.isNaN(port) ? null : port,
+        IsActive: updated.IsActive
+      })
+
+      setStatusMsg(`Updated ${updated?.DeviceCode || deviceID} @ ${new Date().toLocaleTimeString()}`)
+      await loadDevices({ silent: true })
+      setError(null)
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -224,6 +242,176 @@ export default function DevicesPage() {
     }
   }
 
+  const allDeviceIds = React.useMemo(() => devices.map(d => d.DeviceID).filter(Boolean), [devices])
+  const allSelected = React.useMemo(() => allDeviceIds.length > 0 && allDeviceIds.every(id => selectedDeviceIds.includes(id)), [allDeviceIds, selectedDeviceIds])
+  const someSelected = React.useMemo(() => selectedDeviceIds.length > 0 && !allSelected, [selectedDeviceIds, allSelected])
+
+  const toggleAll = React.useCallback((checked) => {
+    setSelectedDeviceIds(checked ? allDeviceIds : [])
+  }, [allDeviceIds])
+
+  const toggleOne = React.useCallback((deviceId, checked) => {
+    if (!deviceId) return
+    setSelectedDeviceIds((prev) => {
+      const arr = Array.isArray(prev) ? prev : []
+      if (checked) {
+        if (arr.includes(deviceId)) return arr
+        return [...arr, deviceId]
+      }
+      return arr.filter((id) => id !== deviceId)
+    })
+  }, [])
+
+  const handleTestSelected = async () => {
+    if (!selectedDeviceIds.length) {
+      setStatusMsg('Select at least one device.')
+      return
+    }
+
+    setBusyId('BATCH_TEST')
+    try {
+      try {
+        const result = await api.testDevicesBatch({ deviceIds: selectedDeviceIds })
+        const results = Array.isArray(result?.results) ? result.results : []
+        const ok = results.filter(r => r.success).length
+        setStatusMsg(`Batch test complete: ${ok}/${results.length || selectedDeviceIds.length} OK`)
+      } catch (_) {
+        const byId = new Map(devices.map(d => [d.DeviceID, d]))
+        let ok = 0
+        let total = 0
+        for (const id of selectedDeviceIds) {
+          const dev = byId.get(id)
+          if (!dev?.DeviceCode) continue
+          total += 1
+          try {
+            const r = await api.testDeviceConnection({ deviceCode: dev.DeviceCode })
+            if (r?.success) ok += 1
+          } catch (_) {}
+        }
+        setStatusMsg(`Batch test complete: ${ok}/${total} OK`)
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleHeartbeatSelected = async () => {
+    if (!selectedDeviceIds.length) {
+      setStatusMsg('Select at least one device.')
+      return
+    }
+
+    setBusyId('BATCH_HEARTBEAT')
+    try {
+      try {
+        const result = await api.heartbeatDevicesBatch({ deviceIds: selectedDeviceIds, actor: 'UI_DEVICES' })
+        setStatusMsg(`Heartbeat updated for ${result?.updated ?? selectedDeviceIds.length} device(s).`)
+        loadDevices({ silent: true })
+      } catch (_) {
+        const byId = new Map(devices.map(d => [d.DeviceID, d]))
+        let updated = 0
+        for (const id of selectedDeviceIds) {
+          const dev = byId.get(id)
+          if (!dev?.DeviceCode) continue
+          try {
+            await api.sendDeviceHeartbeat({ deviceCode: dev.DeviceCode, deviceID: dev.DeviceID, actor: 'UI_DEVICES' })
+            updated += 1
+          } catch (_) {}
+        }
+        setStatusMsg(`Heartbeat sent for ${updated} device(s).`)
+        loadDevices({ silent: true })
+      }
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleRegisterSelected = async () => {
+    if (!selectedDeviceIds.length) {
+      setStatusMsg('Select at least one device.')
+      return
+    }
+
+    setBusyId('BATCH_REGISTER')
+    try {
+      const byId = new Map(devices.map(d => [d.DeviceID, d]))
+      let ok = 0
+      let total = 0
+      for (const id of selectedDeviceIds) {
+        const dev = byId.get(id)
+        if (!dev?.DeviceCode) continue
+        total += 1
+        try {
+          await api.registerDeviceConnection({
+            deviceCode: dev.DeviceCode,
+            deviceName: dev.DeviceName,
+            deviceType: dev.DeviceType || 'TCP',
+            serialNumber: dev.SerialNumber,
+            ipAddress: dev.IPAddress,
+            port: dev.Port,
+            registeredBy: 'UI_DEVICES'
+          })
+          ok += 1
+        } catch (_) {}
+      }
+      setStatusMsg(`Register complete: ${ok}/${total} device(s).`)
+      loadDevices({ silent: true })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleExportSelected = async () => {
+    if (!selectedDeviceIds.length) {
+      setStatusMsg('Select at least one device.')
+      return
+    }
+
+    setBusyId('BATCH_EXPORT')
+    try {
+      const byId = new Map(devices.map(d => [d.DeviceID, d]))
+      let ok = 0
+      let total = 0
+      for (const id of selectedDeviceIds) {
+        const dev = byId.get(id)
+        if (!dev?.DeviceCode) continue
+        total += 1
+        try {
+          const { blob, filename } = await api.exportDeviceLogsCsv({ deviceCode: dev.DeviceCode })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = filename || `device-${dev.DeviceCode}-logs.csv`
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          URL.revokeObjectURL(url)
+          ok += 1
+        } catch (_) {}
+      }
+      setStatusMsg(`Export complete: ${ok}/${total} file(s).`)
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleImportSelected = () => {
+    if (selectedDeviceIds.length !== 1) {
+      setStatusMsg('Select exactly one device to import a CSV.')
+      return
+    }
+    const target = devices.find(d => d.DeviceID === selectedDeviceIds[0]) || null
+    if (!target) {
+      setStatusMsg('Selected device not found.')
+      return
+    }
+    importTargetRef.current = target
+    if (importFileInputRef.current) {
+      importFileInputRef.current.value = ''
+      importFileInputRef.current.click()
+    }
+  }
+
   return (
   <>
       <input
@@ -242,22 +430,152 @@ export default function DevicesPage() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 13, opacity: 0.85 }}>
+          Selected: <strong>{selectedDeviceIds.length}</strong>
+        </div>
+        <button
+          style={{
+            background: 'var(--primary)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 10px',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            opacity: busyId ? 0.6 : 1
+          }}
+          onClick={handleRegisterSelected}
+          disabled={!!busyId}
+        >
+          Register Selected
+        </button>
+        <button
+          style={{
+            background: '#334155',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 10px',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            opacity: busyId ? 0.6 : 1
+          }}
+          onClick={handleTestSelected}
+          disabled={!!busyId}
+        >
+          Test Selected
+        </button>
+        <button
+          style={{
+            background: 'var(--primary)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 10px',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            opacity: busyId ? 0.6 : 1
+          }}
+          onClick={handleHeartbeatSelected}
+          disabled={!!busyId}
+        >
+          Heartbeat Selected
+        </button>
+        <button
+          style={{
+            background: '#0f1f3d',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 10px',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            opacity: busyId ? 0.6 : 1
+          }}
+          onClick={handleExportSelected}
+          disabled={!!busyId}
+        >
+          Export Selected
+        </button>
+        <button
+          style={{
+            background: '#111827',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 10px',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            opacity: busyId ? 0.6 : 1
+          }}
+          onClick={handleImportSelected}
+          disabled={!!busyId}
+          title="Import attendance CSV exported from TM200/Zwkq (select exactly one device)"
+        >
+          Import CSV
+        </button>
+        <button
+          style={{
+            background: '#111827',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            padding: '6px 10px',
+            whiteSpace: 'nowrap',
+            cursor: 'pointer',
+            opacity: busyId ? 0.6 : 1
+          }}
+          onClick={() => setSelectedDeviceIds([])}
+          disabled={!!busyId || selectedDeviceIds.length === 0}
+        >
+          Clear Selection
+        </button>
+      </div>
+
       <GenericDataTable
         title="Devices"
-        columns={['Status', 'DeviceCode', 'MachineID', 'CommPort', 'DeviceName', 'DeviceType', 'SerialNumber', 'IPAddress', 'Port', 'RegisteredAt', 'LastSeenAt', 'IsActive', 'Actions']}
-        formColumns={['DeviceCode', 'MachineID', 'CommPort', 'DevicePassword', 'DeviceName', 'DeviceType', 'IPAddress', 'Port', 'SerialNumber']}
-        columnSchema={{ Port: { type: 'number' }, MachineID: { type: 'number' }, CommPort: { type: 'number' }, DevicePassword: { type: 'password' } }}
+        columns={[
+          {
+            key: 'Select',
+            label: '',
+            header: (
+              <Checkbox
+                size="small"
+                checked={allSelected}
+                indeterminate={someSelected}
+                onChange={(e) => toggleAll(e.target.checked)}
+                inputProps={{ 'aria-label': 'Select all devices' }}
+              />
+            )
+          },
+          'Status',
+          'DeviceCode',
+          'DeviceName',
+          'IPAddress',
+          'Port',
+          'LastSeenAt'
+        ]}
+        formColumns={['DeviceCode', 'DeviceName', 'IPAddress', 'Port', 'DeviceType', 'SerialNumber']}
+        columnSchema={{ Port: { type: 'number' } }}
         data={devices}
         loading={loading}
         error={error}
         primaryKeyField="DeviceID"
-        allowEdit={false}
         allowDelete={false}
         onAdd={handleAdd}
-        onEdit={() => {}}
+        onEdit={handleEdit}
         onDelete={() => {}}
         renderRow={(row) => (
           <>
+            <TableCell>
+              <Checkbox
+                size="small"
+                checked={selectedDeviceIds.includes(row.DeviceID)}
+                onChange={(e) => toggleOne(row.DeviceID, e.target.checked)}
+                inputProps={{ 'aria-label': `Select device ${row.DeviceCode || ''}` }}
+              />
+            </TableCell>
             <TableCell>
               <span
                 style={{
@@ -274,112 +592,13 @@ export default function DevicesPage() {
                 {isOnline(row) ? 'ONLINE' : 'OFFLINE'}
               </span>
             </TableCell>
-            <TableCell>{row.DeviceCode}</TableCell>
-            <TableCell>{row.MachineID ?? ''}</TableCell>
-            <TableCell>{row.CommPort ?? ''}</TableCell>
-            <TableCell>{row.DeviceName}</TableCell>
-            <TableCell>{row.DeviceType}</TableCell>
-            <TableCell>{row.SerialNumber}</TableCell>
+            <TableCell>
+              {row.DeviceCode ?? ''}
+            </TableCell>
+            <TableCell>{row.DeviceName || ''}</TableCell>
             <TableCell>{row.IPAddress || ''}</TableCell>
             <TableCell>{row.Port ?? ''}</TableCell>
-            <TableCell>{formatDateTime(row.RegisteredAt)}</TableCell>
             <TableCell>{formatDateTime(row.LastSeenAt)}</TableCell>
-            <TableCell>{row.IsActive ? 'Yes' : 'No'}</TableCell>
-            <TableCell style={{ minWidth: 320 }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-              <button
-                style={{
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 10px',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  cursor: 'pointer',
-                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
-                }}
-                onClick={() => registerConnection(row)}
-                disabled={busyId === (row.DeviceID || row.DeviceCode)}
-              >
-                Register
-              </button>
-              <button
-                style={{
-                  background: '#334155',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 10px',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  cursor: 'pointer',
-                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
-                }}
-                onClick={() => testConnection(row)}
-                disabled={busyId === (row.DeviceID || row.DeviceCode)}
-              >
-                Test
-              </button>
-              <button
-                style={{
-                  background: 'var(--primary)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 10px',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  cursor: 'pointer',
-                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
-                }}
-                onClick={() => sendHeartbeat(row)}
-                disabled={busyId === (row.DeviceID || row.DeviceCode)}
-              >
-                Heartbeat
-              </button>
-              <button
-                style={{
-                  background: '#0f1f3d',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 10px',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  cursor: 'pointer',
-                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
-                }}
-                onClick={() => exportLogs(row)}
-                disabled={busyId === (row.DeviceID || row.DeviceCode)}
-              >
-                Export Logs
-              </button>
-              <button
-                style={{
-                  background: '#111827',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 6,
-                  padding: '6px 10px',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  cursor: 'pointer',
-                  opacity: busyId === (row.DeviceID || row.DeviceCode) ? 0.6 : 1
-                }}
-                onClick={() => startImportCsv(row)}
-                disabled={busyId === (row.DeviceID || row.DeviceCode)}
-                title="Import attendance CSV exported from TM200/Zwkq"
-              >
-                Import CSV
-              </button>
-              </div>
-            </TableCell>
           </>
         )}
       />

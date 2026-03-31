@@ -13,7 +13,7 @@ function fmtDate(value) {
   if (!value) return '-'
   if (typeof value === 'string') {
     const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}/)
-    if (isoMatch) return isoMatch[1] // keep server-provided date, no TZ shift
+    if (isoMatch) return isoMatch[1]
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
   }
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value
@@ -26,7 +26,7 @@ function fmtTime(value) {
   if (!value) return '-'
   if (typeof value === 'string') {
     const isoMatch = value.match(/^[^T]*T?(\d{2}:\d{2})(?::\d{2})?/)
-    if (isoMatch) return isoMatch[1] // use server time portion as-is
+    if (isoMatch) return isoMatch[1]
     if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
   }
   const d = new Date(value)
@@ -54,7 +54,6 @@ export default function BiometricScansPage() {
 
   React.useEffect(() => {
     loadScans()
-    // auto-refresh every 5 seconds for live feed
     const iv = setInterval(() => { loadScans() }, 5000)
     return () => clearInterval(iv)
   }, [])
@@ -106,7 +105,6 @@ export default function BiometricScansPage() {
     return true
   })
 
-  // counts per day chart data
   const chartData = React.useMemo(() => {
     const map = {}
     filtered.forEach(s => {

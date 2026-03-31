@@ -34,10 +34,6 @@ async function handleRes(res) {
   return res.json().catch(() => null)
 }
 
-// =============================
-// GENERIC CRUD
-// =============================
-
 export async function fetchAll(endpoint) {
   const res = await fetch(`${BASE}/${endpoint}`)
   return handleRes(res)
@@ -90,7 +86,6 @@ export async function createUser(data) {
   }
 }
 
-// Compatibility: users are backed by Employees in the new schema.
 export async function updateUser(id, data) {
   const [firstName = '', ...rest] = String(data?.name || '').trim().split(/\s+/)
   const lastName = rest.join(' ')
@@ -174,7 +169,6 @@ async function deleteViaPost(endpoint, id) {
   return handleRes(res)
 }
 
-// Legacy wrappers kept for existing pages; backend currently supports only attendance/log.
 export async function createAttendanceRecord(data) {
   return recordAttendance(data?.employeeCode || data?.EmployeeCode, data?.logType || 'MORNING_IN')
 }
@@ -188,7 +182,6 @@ export async function updateAttendanceRecord(id, data) {
     AfternoonTimeOut: data?.AfternoonTimeOut || data?.afternoonOut || null,
     EmployeeID: data?.EmployeeID || data?.employeeID || null
   }
-  // Try PUT first; if blocked/404 (mock server), fall back to POST /attendance/update
   let res = await fetch(`${BASE}/attendance/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -266,6 +259,11 @@ export async function registerDeviceConnection({
   })
 }
 
+export async function updateDevice(deviceID, data) {
+  if (!deviceID) throw new Error('DeviceID is required')
+  return updateRecord('devices', deviceID, data)
+}
+
 export async function sendDeviceHeartbeat({ deviceCode = null, deviceID = null, actor = null }) {
   return createRecord('devices/heartbeat', {
     DeviceCode: deviceCode,
@@ -281,9 +279,26 @@ export async function testDeviceConnection({ deviceCode = null, ipAddress = null
     Port: port
   })
 }
+
+export async function testDevicesBatch({ deviceIds = [] } = {}) {
+  const res = await fetch(`${BASE}/devices/test-batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceIds: Array.isArray(deviceIds) ? deviceIds : [] })
+  })
+  return handleRes(res)
+}
+
+export async function heartbeatDevicesBatch({ deviceIds = [], actor = null } = {}) {
+  const res = await fetch(`${BASE}/devices/heartbeat-batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceIds: Array.isArray(deviceIds) ? deviceIds : [], actor })
+  })
+  return handleRes(res)
+}
 function getFilenameFromContentDisposition(value) {
   if (!value) return null
-  // Basic support for: attachment; filename="file.csv"
   const match = String(value).match(/filename\s*=\s*\"?([^\";]+)\"?/i)
   return match ? match[1] : null
 }
@@ -392,10 +407,6 @@ export async function deleteRecord(endpoint, id) {
   return true
 }
 
-// =============================
-// SHIFT DEFINITIONS
-// =============================
-
 export async function fetchShiftDefinitions() {
   return fetchAll('shift-definitions')
 }
@@ -412,7 +423,6 @@ export async function deleteShiftDefinition(id) {
   return deleteRecord('shift-definitions', id)
 }
 
-// Schedule Periods
 export async function fetchSchedulePeriods() {
   return fetchAll('schedule-periods')
 }
@@ -429,11 +439,9 @@ export async function deleteSchedulePeriod(id) {
   try {
     return await deleteRecord('schedule-periods', id)
   } catch (err1) {
-    // Backward-compatible fallback if server exposes only shift-definitions delete.
     try {
       return await deleteRecord('shift-definitions', id)
     } catch (err2) {
-      // Fallback when DELETE method is blocked/mismatched in environment.
       try {
         return await deleteViaPost('schedule-periods/delete', id)
       } catch (err3) {
@@ -489,7 +497,7 @@ export async function removeShiftAssignments({
   shiftID,
   employeeIDs = [],
   effectiveTo = null,
-  mode = 'end' // 'end' to end-date, 'delete' to hard-remove if backend allows
+  mode = 'end'
 }) {
   const payload = {
     shiftID: shiftID || null,

@@ -144,13 +144,15 @@ function enrichToday(records, opts = {}) {
     const requireMorningOut = isPastRecord || (isTodayRecord && hourNow >= morningOutHour)
     const requireAfternoonOut = isPastRecord || (isTodayRecord && hourNow >= afternoonOutHour)
 
+    const hasMorningReq = !!(r.RequiredMorningIn || r.RequiredMorningOut)
+    const hasAfternoonReq = !!(r.RequiredAfternoonIn || r.RequiredAfternoonOut)
+
     let incomplete = false
     if (!absent) {
-      if (requireMorningOut && (!hasMorningIn || !hasMorningOut)) incomplete = true
-      if (requireAfternoonOut && (!hasAfternoonIn || !hasAfternoonOut)) incomplete = true
+      if (hasMorningReq && requireMorningOut && (!hasMorningIn || !hasMorningOut)) incomplete = true
+      if (hasAfternoonReq && requireAfternoonOut && (!hasAfternoonIn || !hasAfternoonOut)) incomplete = true
     }
 
-    // During in-progress shifts, allow "on time so far" if morning-in exists and no late/early/incomplete flags.
     const onTime = !absent && hasMorningIn && !late && !earlyLeave && !incomplete
 
     return { ...r, flags: { onTime, late, absent, earlyLeave, incomplete } }
@@ -180,8 +182,6 @@ function computeComparisonStats(records, refNow = new Date()) {
       continue
     }
 
-    // Backend /attendance/range can label "Incomplete" while still having a late IN time (day in progress).
-    // Detect lateness directly from IN times vs required IN + grace, if those fields exist.
     const grace = Number(raw.GracePeriodMinutes ?? raw.gracePeriodMinutes ?? 0) || 0
     const minMorningIn = hhmmToMinutes(raw.MorningTimeIn)
     const minReqMorningIn = hhmmToMinutes(raw.RequiredMorningIn)
@@ -215,7 +215,7 @@ function computeComparisonStats(records, refNow = new Date()) {
 }
 
 export default function OverviewDashboard({ onOpenAttendance }) {
-  const [overviewRecords, setOverviewRecords] = React.useState([]) // last 30 days
+  const [overviewRecords, setOverviewRecords] = React.useState([])
   const [todayRecords, setTodayRecords] = React.useState([])
   const [employees, setEmployees] = React.useState([])
   const [loadingOverview, setLoadingOverview] = React.useState(true)
@@ -292,7 +292,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     const enriched = enrichToday(records, { now: refNow })
     let onTime = 0, late = 0, absent = 0, earlyLeave = 0, incomplete = 0
     for (const r of enriched) {
-      // Priority: absent > incomplete > late > earlyLeave > onTime
       if (r.flags.absent) absent += 1
       else if (r.flags.incomplete) incomplete += 1
       else if (r.flags.late) late += 1
@@ -303,7 +302,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     return { onTime, late, absent, earlyLeave, incomplete, totalLogs }
   }, [])
 
-  // Stats (today / yesterday)
   const stats = React.useMemo(() => computeStats(todayRecords, now), [todayRecords, now, computeStats])
   const yesterdayRecords = React.useMemo(
     () => overviewRecords.filter(r => (r.NormalizedDate || toDateStr(r.AttendanceDate || r.AttendanceDay || r.CreatedAt || r.date || r.attendance_date || r.Date)) === yesterdayStr),
@@ -335,9 +333,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     incomplete: makeDelta(stats.incomplete, yesterdayStats.incomplete, 'down')
   }
 
-
-  // Department Attendance today (percent of employees per dept that logged today)
-  // Keep chart readable at scale: Top 5 + Others
   const deptAttendance = React.useMemo(() => {
     const empDept = {}
     const empDeptByCode = {}
@@ -435,7 +430,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     return rows
   }, [deptAttendance.ranked, deptQuery, deptSort])
 
-  // Comparison chart (last 14 days): On-time vs Late vs Absent
   const comparisonData = React.useMemo(() => {
     const days = Array.from({ length: 14 }).map((_, idx) => {
       const d = new Date()
@@ -454,7 +448,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     const labels = days.map(d =>
       d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     )
-    // Use 1 decimal place so small values (e.g. 3/800 = 0.4%) don't round down to 0.
     const pct1 = (num, total) => (total > 0 ? Math.round((num / total) * 1000) / 10 : 0)
     return {
       labels,
@@ -754,7 +747,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
 }
 
 function StatCard({ title, value, accent: color = '#2563eb', icon = null, deltaText, deltaTone = 'neutral' }) {
-  // Resolve CSS variables at render-time for theme reactivity
   const primary = getCssVar('--primary', '#009063')
   const muted = getCssVar('--muted', '#6b7280')
   const toneMap = {

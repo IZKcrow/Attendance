@@ -33,7 +33,6 @@ const dbConfig = {
   requestTimeout: 60000
 }
 
-// Log the effective DB connection (without password)
 console.log('DB config:', {
   user: dbConfig.user,
   server: dbConfig.server,
@@ -44,7 +43,6 @@ console.log('DB config:', {
 
 let poolPromise = null
 
-// Helper to normalize various time inputs into HH:mm:ss.
 function parseTimeString(value) {
   if (value == null) return null
 
@@ -64,13 +62,11 @@ function parseTimeString(value) {
   const raw = value.trim()
   if (!raw) return null
 
-  // ISO-like datetime: keep literal clock part to avoid timezone shifts.
   const isoMatch = raw.match(/T(\d{2}):(\d{2})(?::(\d{2}))?/)
   if (isoMatch) {
     return toLiteral(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3] || 0))
   }
 
-  // 12-hour input, e.g. 8:00 AM
   const ampmMatch = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])$/)
   if (ampmMatch) {
     let h = Number(ampmMatch[1])
@@ -83,7 +79,6 @@ function parseTimeString(value) {
     return toLiteral(h, m, s)
   }
 
-  // 24-hour input, e.g. 08:00 or 08:00:00
   const hmMatch = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
   if (hmMatch) {
     return toLiteral(Number(hmMatch[1]), Number(hmMatch[2]), Number(hmMatch[3] || 0))
@@ -163,11 +158,9 @@ function parseCsvRows(csvText) {
     field += ch
   }
 
-  // last field/row
   pushField()
   if (row.length) pushRow()
 
-  // drop trailing empty row
   while (rows.length && rows[rows.length - 1].every(v => String(v ?? '') === '')) rows.pop()
 
   return rows
@@ -258,16 +251,12 @@ async function writeAuditLog(pool, payload) {
       (@AuditLogID, @Actor, @Action, @TableName, @RecordID, @BeforeJson, @AfterJson, @DeviceID, @IPAddress)
     `)
   } catch (_) {
-    // Do not block business flow if audit logging fails.
   }
 }
 
 async function initDbIfNeeded(pool) {
-  // Create FlexiAttendanceSystem schema tables if they don't exist
-  // Split into separate statements to avoid SQL batch issues
 
   const tableStatements = [
-    // Employees
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Employees' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.Employees (
@@ -289,12 +278,15 @@ BEGIN
   )
 END`,
 
-    // ShiftDefinitions
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftDefinitions' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.ShiftDefinitions (
     ShiftID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
     ShiftName NVARCHAR(100) NOT NULL,
+    ExternalSource NVARCHAR(50) NULL,
+    ExternalShiftCode NVARCHAR(50) NULL,
+    ExternalShiftName NVARCHAR(100) NULL,
+    ExternalConfigJson NVARCHAR(MAX) NULL,
     MorningTimeIn TIME(7) NOT NULL,
     MorningTimeOut TIME(7) NOT NULL,
     AfternoonTimeIn TIME(7) NOT NULL,
@@ -305,7 +297,41 @@ BEGIN
   )
 END`,
 
-    // ShiftDays
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftSegments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.ShiftSegments (
+    ShiftSegmentID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    ShiftID UNIQUEIDENTIFIER NOT NULL,
+    SegmentNo INT NOT NULL CHECK (SegmentNo BETWEEN 1 AND 3),
+    StartTime TIME(7) NOT NULL,
+    EndTime TIME(7) NOT NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    CONSTRAINT UQ_ShiftSegments_Shift_Segment UNIQUE (ShiftID, SegmentNo),
+    FOREIGN KEY (ShiftID) REFERENCES dbo.ShiftDefinitions(ShiftID) ON DELETE CASCADE
+  );
+END`,
+
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftPunchRules' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.ShiftPunchRules (
+    ShiftPunchRuleID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    ShiftID UNIQUEIDENTIFIER NOT NULL,
+    SegmentNo INT NOT NULL CHECK (SegmentNo BETWEEN 1 AND 3),
+    BeforeStartMinutes INT NULL,
+    AfterStartMinutes INT NULL,
+    BeforeEndMinutes INT NULL,
+    AfterEndMinutes INT NULL,
+    LateMinutes INT NULL,
+    EarlyLeaveMinutes INT NULL,
+    Enabled BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    CONSTRAINT UQ_ShiftPunchRules_Shift_Segment UNIQUE (ShiftID, SegmentNo),
+    CONSTRAINT FK_ShiftPunchRules_ShiftSegments FOREIGN KEY (ShiftID, SegmentNo) REFERENCES dbo.ShiftSegments(ShiftID, SegmentNo) ON DELETE CASCADE
+  );
+END`,
+
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftDays' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.ShiftDays (
@@ -316,7 +342,6 @@ BEGIN
   )
 END`,
 
-    // ShiftDaySchedules (day-specific times under one ShiftID)
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ShiftDaySchedules' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.ShiftDaySchedules (
@@ -333,7 +358,6 @@ BEGIN
   )
 END`,
 
-    // EmployeeShiftAllotments
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'EmployeeShiftAllotments' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.EmployeeShiftAllotments (
@@ -346,7 +370,6 @@ BEGIN
     FOREIGN KEY (ShiftID) REFERENCES dbo.ShiftDefinitions(ShiftID)
   )
 END`,
-    // Performance indexes for attendance/shift resolution
     `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_EmployeeShiftAllotments_EmpDate' AND object_id = OBJECT_ID('dbo.EmployeeShiftAllotments'))
 BEGIN
   CREATE INDEX IX_EmployeeShiftAllotments_EmpDate
@@ -368,7 +391,29 @@ BEGIN
   ON dbo.ShiftDaySchedules(ShiftID, DayOfWeek)
 END`,
 
-    // AttendanceRecords
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'EmployeeShiftDailyAssignments' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.EmployeeShiftDailyAssignments (
+    AssignmentID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NOT NULL,
+    WorkDate DATE NOT NULL,
+    ShiftID UNIQUEIDENTIFIER NOT NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    CONSTRAINT UQ_EmployeeShiftDailyAssignments_EmpDate UNIQUE (EmployeeID, WorkDate),
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID),
+    FOREIGN KEY (ShiftID) REFERENCES dbo.ShiftDefinitions(ShiftID)
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_EmployeeShiftDailyAssignments_WorkDate' AND object_id = OBJECT_ID('dbo.EmployeeShiftDailyAssignments'))
+  BEGIN
+    CREATE INDEX IX_EmployeeShiftDailyAssignments_WorkDate ON dbo.EmployeeShiftDailyAssignments(WorkDate, EmployeeID, ShiftID)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_EmployeeShiftDailyAssignments_ShiftDate' AND object_id = OBJECT_ID('dbo.EmployeeShiftDailyAssignments'))
+  BEGIN
+    CREATE INDEX IX_EmployeeShiftDailyAssignments_ShiftDate ON dbo.EmployeeShiftDailyAssignments(ShiftID, WorkDate, EmployeeID)
+  END
+END`,
+
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AttendanceRecords' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.AttendanceRecords (
@@ -391,7 +436,6 @@ BEGIN
   END
 END`,
 
-    // Devices (scanner terminals / mobile clients)
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Devices' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.Devices (
@@ -411,7 +455,6 @@ BEGIN
   )
 END`,
 
-    // Face profiles (embedding storage)
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'FaceProfiles' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.FaceProfiles (
@@ -433,7 +476,6 @@ BEGIN
   END
 END`,
 
-    // Biometric scans (face scan attempts and outcomes)
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'BiometricScans' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.BiometricScans (
@@ -465,7 +507,22 @@ BEGIN
   END
 END`,
 
-    // DeviceAttendanceEvents (raw imported scanner events, e.g. TM200 CSV exports)
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'BiometricScanImages' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.BiometricScanImages (
+    BiometricScanImageID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    BiometricScanID UNIQUEIDENTIFIER NOT NULL,
+    Image VARBINARY(MAX) NOT NULL,
+    MimeType NVARCHAR(100) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    FOREIGN KEY (BiometricScanID) REFERENCES dbo.BiometricScans(BiometricScanID) ON DELETE CASCADE
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_BiometricScanImages_Scan' AND object_id = OBJECT_ID('dbo.BiometricScanImages'))
+  BEGIN
+    CREATE INDEX IX_BiometricScanImages_Scan ON dbo.BiometricScanImages(BiometricScanID, CreatedAt DESC)
+  END
+END`,
+
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DeviceAttendanceEvents' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.DeviceAttendanceEvents (
@@ -493,7 +550,6 @@ BEGIN
   END
 END`,
 
-    // Audit logs (generic audit trail)
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AuditLogs' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.AuditLogs (
@@ -519,7 +575,6 @@ BEGIN
   END
 END`,
 
-    // View (split DROP and CREATE so CREATE is first in its batch)
     `IF OBJECT_ID('dbo.vw_AttendanceStatus','V') IS NOT NULL DROP VIEW dbo.vw_AttendanceStatus;`,
     `CREATE VIEW dbo.vw_AttendanceStatus AS
   SELECT 
@@ -541,7 +596,6 @@ END`,
   JOIN dbo.EmployeeShiftAllotments sa ON e.EmployeeID = sa.EmployeeID
   JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID;`,
 
-    // Stored Procedure
     `IF OBJECT_ID('dbo.sp_RecordAttendance','P') IS NOT NULL DROP PROCEDURE dbo.sp_RecordAttendance;`,
     `CREATE PROCEDURE dbo.sp_RecordAttendance
     @EmployeeCode NVARCHAR(50),
@@ -599,7 +653,6 @@ END`,
     for (const stmt of tableStatements) {
       await pool.request().query(stmt)
     }
-    // Migration: add missing columns to existing tables if needed
     const migrationStatements = [
       `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Employees') AND name = 'Department')
 BEGIN
@@ -628,6 +681,22 @@ BEGIN
   ALTER TABLE dbo.FaceProfiles ADD EmbeddingText NVARCHAR(MAX) NULL
 END`
       ,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'ExternalSource')
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ADD ExternalSource NVARCHAR(50) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'ExternalShiftCode')
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ADD ExternalShiftCode NVARCHAR(50) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'ExternalShiftName')
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ADD ExternalShiftName NVARCHAR(100) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'ExternalConfigJson')
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ADD ExternalConfigJson NVARCHAR(MAX) NULL
+END`,
       `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Devices') AND name = 'IPAddress')
 BEGIN
   ALTER TABLE dbo.Devices ADD IPAddress NVARCHAR(64) NULL
@@ -661,7 +730,6 @@ END`
 async function getPool() {
   if (!poolPromise) {
     poolPromise = sql.connect(dbConfig)
-    // ensure initialization completes after connection
     poolPromise = poolPromise.then(async (p) => {
       try {
         await initDbIfNeeded(p)
@@ -723,7 +791,6 @@ app.get('/employees', async (req, res) => {
   }
 })
 
-// Compatibility: map old Users endpoint to Employees (lightweight)
 app.get('/users', async (req, res) => {
   try {
     const pool = await getPool()
@@ -1059,7 +1126,6 @@ app.post('/shift-definitions/delete', async (req, res) => {
 
 
 
-// Compatibility: schedule-periods -> list shift definitions (periods)
 app.get('/schedule-periods', async (req, res) => {
   try {
     const pool = await getPool()
@@ -1139,7 +1205,7 @@ app.delete('/schedule-periods/:id', async (req, res) => {
   try {
     const pool = await getPool()
 
-    // Remove allotments first to satisfy FK constraints, then remove shift definition.
+    
     await pool.request()
       .input('ShiftID', sql.NVarChar(36), id)
       .query('DELETE FROM dbo.EmployeeShiftAllotments WHERE ShiftID=@ShiftID')
@@ -1178,7 +1244,6 @@ app.post('/schedule-periods/delete', async (req, res) => {
   }
 })
 
-// Create a shift definition
 app.post('/schedule-details', async (req, res) => {
   const { PeriodName, Days, ShiftStartTime, ShiftEndTime, BreakStartTime, BreakEndTime } = req.body
   try {
@@ -1205,7 +1270,6 @@ app.post('/schedule-details', async (req, res) => {
     const insertQ = `INSERT INTO dbo.ShiftDefinitions (ShiftID, ShiftName, MorningTimeIn, MorningTimeOut, AfternoonTimeIn, AfternoonTimeOut)
       VALUES (@ShiftID, @ShiftName, CAST(@MorningTimeIn AS TIME(7)), CAST(@MorningTimeOut AS TIME(7)), CAST(@AfternoonTimeIn AS TIME(7)), CAST(@AfternoonTimeOut AS TIME(7)))`
     await request.query(insertQ)
-    // insert days
     const dayList = Array.isArray(Days) ? Days : (typeof Days === 'string' ? Days.split(',').map(d => d.trim()).filter(Boolean).map(Number) : [])
     for (const d of dayList) {
       const dayValue = (d === 0) ? 7 : d
@@ -1218,14 +1282,12 @@ app.post('/schedule-details', async (req, res) => {
   }
 })
 
-// Bulk: create shifts/allotments for an employee (used by Scheduler)
 app.post('/schedule-details/bulk', async (req, res) => {
   const { employeeID, schedule, EffectiveFrom, EffectiveTo } = req.body
   if (!Array.isArray(schedule)) return res.status(400).json({ error: 'schedule must be an array' })
   try {
     const pool = await getPool()
     const { randomUUID } = require('crypto')
-    // Group schedule rows by identical time patterns to create one shift with multiple days
     const groups = {}
     for (const row of schedule) {
       const key = `${row.amIn}-${row.amOut}|${row.pmIn}-${row.pmOut}`
@@ -1251,8 +1313,6 @@ app.post('/schedule-details/bulk', async (req, res) => {
         const dayValue = (d === 0) ? 7 : d
         await pool.request().input('ShiftDayID', sql.NVarChar(36), randomUUID()).input('ShiftID', sql.NVarChar(36), shiftID).input('DayOfWeek', sql.Int, dayValue).query('INSERT INTO dbo.ShiftDays (ShiftDayID, ShiftID, DayOfWeek) VALUES (@ShiftDayID, @ShiftID, @DayOfWeek)')
       }
-      // create allotment for employee
-      // Use provided EffectiveFrom/EffectiveTo if supplied; otherwise EffectiveFrom defaults to today and EffectiveTo remains NULL (ongoing)
       const effFrom = EffectiveFrom ? new Date(EffectiveFrom) : new Date()
       const effTo = EffectiveTo ? new Date(EffectiveTo) : null
       const reqAll = pool.request()
@@ -1271,7 +1331,6 @@ app.post('/schedule-details/bulk', async (req, res) => {
   }
 })
 
-// Assign an existing shift to many employees (or all employees)
 app.post('/shift-assignments/bulk', async (req, res) => {
   const { shiftID, employeeIDs, assignAll, effectiveFrom, effectiveTo } = req.body
 
@@ -1305,7 +1364,6 @@ app.post('/shift-assignments/bulk', async (req, res) => {
     if (Number.isNaN(effFrom.getTime())) return res.status(400).json({ error: 'Invalid effectiveFrom date' })
     if (effTo && Number.isNaN(effTo.getTime())) return res.status(400).json({ error: 'Invalid effectiveTo date' })
 
-    // Build CSV list and pass to SQL to split
     const empCsv = targetEmployeeIDs.join(',')
     request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
     request.input('ShiftID', sql.NVarChar(36), shiftID)
@@ -1345,7 +1403,6 @@ app.post('/shift-assignments/bulk', async (req, res) => {
     `)
 
     await transaction.commit()
-    // rowsAffected is an array per statement; take last insert count
     const assigned = result?.rowsAffected?.[result.rowsAffected.length - 1] || 0
     res.json({ success: true, assigned, shiftID })
   } catch (err) {
@@ -1355,7 +1412,6 @@ app.post('/shift-assignments/bulk', async (req, res) => {
   }
 })
 
-// End (soft-remove) shift assignments by setting EffectiveTo
 app.post('/shift-assignments/remove', async (req, res) => {
   const { shiftID = null, employeeIDs = [], effectiveTo = null } = req.body
   if (!Array.isArray(employeeIDs) || employeeIDs.length === 0) {
@@ -1371,7 +1427,7 @@ app.post('/shift-assignments/remove', async (req, res) => {
     transaction = new sql.Transaction(pool)
     await transaction.begin()
     const request = new sql.Request(transaction)
-    const isoDate = effTo.toISOString().slice(0, 10) // YYYY-MM-DD
+    const isoDate = effTo.toISOString().slice(0, 10)
 
     const empCsv = Array.from(new Set(employeeIDs.filter(Boolean))).join(',')
     request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
@@ -1441,7 +1497,6 @@ app.post('/shift-assignments/remove', async (req, res) => {
   }
 })
 
-// List current assignments for given employees
 app.post('/shift-assignments/list', async (req, res) => {
   const { employeeIDs = [] } = req.body
   if (!Array.isArray(employeeIDs) || employeeIDs.length === 0) {
@@ -1577,7 +1632,6 @@ async function processAttendanceLog(pool, { employeeID, logType, now = new Date(
   return { logType, time: currentTime, minutesLate, minutesEarly, status, attendanceDate: todayStr }
 }
 
-// --- Attendance manual edit/update ---------------------------------
 async function updateAttendanceRecord(pool, id, body = {}) {
   if (!id) {
     const err = new Error('AttendanceID is required')
@@ -1701,7 +1755,6 @@ async function updateAttendanceRecord(pool, id, body = {}) {
       throw err
     }
   } catch (err) {
-    // Handle unique EmployeeID+AttendanceDate constraint
     if (err.number === 2627) {
       err.statusCode = 409
       err.message = 'Duplicate AttendanceDate for this employee'
@@ -1727,7 +1780,6 @@ app.put('/attendance/:id', async (req, res) => {
   }
 })
 
-// Legacy fallback used by frontend if PUT is blocked
 app.post('/attendance/update', async (req, res) => {
   const { id, ...payload } = req.body || {}
   try {
@@ -1739,8 +1791,6 @@ app.post('/attendance/update', async (req, res) => {
     res.status(err.statusCode || 500).json({ error: err.message })
   }
 })
-// -------------------------------------------------------------------
-
 
 app.post('/attendance/log', async (req, res) => {
   const { employeeCode, logType } = req.body
@@ -1793,8 +1843,6 @@ app.post('/attendance/log', async (req, res) => {
   }
 })
 
-// ---------------------------------------------------------------------------
-// Simple demo authentication (hard-coded admin/admin)
 app.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {}
   if (username === 'admin' && password === 'admin') {
@@ -1807,7 +1855,6 @@ app.post('/auth/login', (req, res) => {
   }
   return res.status(401).json({ error: 'Invalid credentials' })
 })
-// ---------------------------------------------------------------------------
 
 app.post('/face-scan/recognize', async (req, res) => {
   const { employeeCode, deviceCode, matchScore, rawImageRef, latitude, longitude, actor } = req.body || {}
@@ -1897,7 +1944,6 @@ app.post('/face-scan/recognize', async (req, res) => {
   }
 })
 
-// Device registry (for kiosk/mobile scanner clients)
 app.get('/devices', async (req, res) => {
   try {
     const pool = await getPool()
@@ -1970,6 +2016,86 @@ app.post('/devices', async (req, res) => {
     }
     console.error(err)
     res.status(500).json({ error: err.message })
+  }
+})
+
+app.put('/devices/:id', async (req, res) => {
+  const id = String(req.params.id || '').trim()
+  const body = req.body || {}
+  if (!id) return res.status(400).json({ error: 'DeviceID is required' })
+
+  const getStr = (key) => {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) return null
+    const v = body[key]
+    if (v === undefined || v === null) return null
+    const s = String(v).trim()
+    return s === '' ? null : s
+  }
+
+  const getInt = (key) => {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) return null
+    const raw = body[key]
+    if (raw === undefined || raw === null || raw === '') return null
+    const n = Number.parseInt(String(raw), 10)
+    return Number.isInteger(n) ? n : null
+  }
+
+  const getBool = (key) => {
+    if (!Object.prototype.hasOwnProperty.call(body, key)) return null
+    if (body[key] === undefined || body[key] === null) return null
+    return !!body[key]
+  }
+
+  try {
+    const pool = await getPool()
+
+    const request = pool.request()
+    request.input('DeviceID', sql.NVarChar(36), id)
+    request.input('DeviceName', sql.NVarChar(150), getStr('DeviceName'))
+    request.input('DeviceType', sql.NVarChar(50), getStr('DeviceType'))
+    request.input('SerialNumber', sql.NVarChar(100), getStr('SerialNumber'))
+    request.input('IPAddress', sql.NVarChar(64), getStr('IPAddress'))
+    request.input('Port', sql.Int, getInt('Port'))
+    request.input('MachineID', sql.Int, getInt('MachineID'))
+    request.input('CommPort', sql.Int, getInt('CommPort'))
+    request.input('DevicePassword', sql.Int, getInt('DevicePassword'))
+    request.input('IsActive', sql.Bit, getBool('IsActive'))
+
+    const updated = await request.query(`
+      UPDATE dbo.Devices
+      SET
+        DeviceName = COALESCE(@DeviceName, DeviceName),
+        DeviceType = COALESCE(@DeviceType, DeviceType),
+        SerialNumber = COALESCE(@SerialNumber, SerialNumber),
+        IPAddress = COALESCE(@IPAddress, IPAddress),
+        Port = COALESCE(@Port, Port),
+        MachineID = COALESCE(@MachineID, MachineID),
+        CommPort = COALESCE(@CommPort, CommPort),
+        DevicePassword = COALESCE(@DevicePassword, DevicePassword),
+        IsActive = COALESCE(@IsActive, IsActive),
+        UpdatedAt = GETDATE()
+      OUTPUT INSERTED.*
+      WHERE DeviceID=@DeviceID
+    `)
+
+    const device = updated.recordset[0]
+    if (!device) return res.status(404).json({ error: 'Device not found' })
+    if (device && Object.prototype.hasOwnProperty.call(device, 'DevicePassword')) delete device.DevicePassword
+
+    await writeAuditLog(pool, {
+      actor: body?.Actor || body?.RegisteredBy || 'UI_DEVICES',
+      action: 'UPDATE_DEVICE',
+      tableName: 'Devices',
+      recordID: id,
+      afterJson: JSON.stringify(device),
+      deviceID: id,
+      ipAddress: req.ip
+    })
+
+    return res.json(device)
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: err.message })
   }
 })
 
@@ -2078,8 +2204,6 @@ function isPrivateIpv4(ip) {
   return false
 }
 
-// Practical TCP reachability test (does not authenticate; it only checks if a TCP socket can connect).
-// Body: { DeviceCode } OR { IPAddress, Port }
 app.post('/devices/test-connection', async (req, res) => {
   const { DeviceCode, IPAddress, Port, DeviceID, Password, CommPort } = req.body || {}
   const normalizedCode = String(DeviceCode || '').trim()
@@ -2187,7 +2311,7 @@ app.post('/devices/test-connection', async (req, res) => {
         })
       }
     } catch (_) {
-      // Bridge not running or failed; fall back to TCP test below.
+   
     }
 
     const net = require('net')
@@ -2228,6 +2352,182 @@ app.post('/devices/test-connection', async (req, res) => {
       serverTime: new Date().toISOString(),
       reason: result.ok ? null : result.reason
     })
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/devices/test-batch', async (req, res) => {
+  const deviceIds = Array.isArray(req.body?.deviceIds) ? req.body.deviceIds : []
+  if (!deviceIds.length) return res.status(400).json({ error: 'deviceIds is required' })
+  if (deviceIds.length > 100) return res.status(413).json({ error: 'Too many deviceIds (max 100).' })
+
+  try {
+    const pool = await getPool()
+    const request = pool.request()
+
+    const params = []
+    deviceIds.forEach((id, idx) => {
+      const key = `DeviceID${idx}`
+      params.push(`@${key}`)
+      request.input(key, sql.NVarChar(36), String(id))
+    })
+
+    const devRes = await request.query(`
+      SELECT DeviceID, DeviceCode, DeviceName, IPAddress, Port, MachineID, CommPort, DevicePassword
+      FROM dbo.Devices
+      WHERE DeviceID IN (${params.join(',')})
+    `)
+
+    const list = devRes.recordset || []
+    const byId = new Map(list.map(d => [String(d.DeviceID), d]))
+
+    const bridgeBase = String(process.env.BIOMETRICS_BRIDGE_URL || '').trim() || 'http://localhost:5001'
+    const { URL } = require('url')
+    const net = require('net')
+
+    const tryBridgeSdk = async (device) => {
+      const targetIp = String(device?.IPAddress || '').trim() || null
+      const targetPort = device?.Port ?? null
+      if (!targetIp || !targetPort) return null
+
+      const numericDeviceId = Number(device?.MachineID || device?.DeviceCode || 0)
+      if (!Number.isInteger(numericDeviceId) || numericDeviceId <= 0) return null
+
+      const payload = {
+        ip: targetIp,
+        port: targetPort,
+        deviceId: numericDeviceId,
+        password: Number(device?.DevicePassword ?? 0),
+        commPort: Number(device?.CommPort ?? 0)
+      }
+
+      const u = new URL('/v1/test-connection', bridgeBase)
+      const isHttps = u.protocol === 'https:'
+      const httpMod = require(isHttps ? 'https' : 'http')
+      const body = JSON.stringify(payload)
+
+      return await new Promise((resolve, reject) => {
+        const req2 = httpMod.request({
+          protocol: u.protocol,
+          hostname: u.hostname,
+          port: u.port,
+          path: u.pathname + u.search,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body)
+          },
+          timeout: 6000
+        }, (resp) => {
+          let data = ''
+          resp.setEncoding('utf8')
+          resp.on('data', (chunk) => { data += chunk })
+          resp.on('end', () => {
+            try {
+              const parsed = data ? JSON.parse(data) : null
+              resolve({ status: resp.statusCode, payload: parsed })
+            } catch (e) {
+              resolve({ status: resp.statusCode, payload: null, raw: data })
+            }
+          })
+        })
+
+        req2.on('timeout', () => {
+          try { req2.destroy(new Error('Bridge timeout')) } catch (_) {}
+        })
+        req2.on('error', (err) => reject(err))
+        req2.write(body)
+        req2.end()
+      })
+    }
+
+    const tcpTest = async (ip, port) => {
+      const startedAt = Date.now()
+      const result = await new Promise((resolve) => {
+        const socket = new net.Socket()
+        const timeoutMs = 3000
+        let done = false
+
+        const finish = (payload) => {
+          if (done) return
+          done = true
+          try { socket.destroy() } catch (_) {}
+          resolve(payload)
+        }
+
+        socket.setTimeout(timeoutMs)
+        socket.once('connect', () => finish({ ok: true }))
+        socket.once('timeout', () => finish({ ok: false, reason: 'timeout' }))
+        socket.once('error', (err) => finish({ ok: false, reason: err?.code || err?.message || 'error' }))
+
+        try { socket.connect(port, ip) } catch (e) { finish({ ok: false, reason: e?.message || 'error' }) }
+      })
+      return { ...result, latencyMs: Date.now() - startedAt }
+    }
+
+    const results = []
+
+    for (const id of deviceIds) {
+      const device = byId.get(String(id)) || null
+      if (!device) {
+        results.push({ deviceId: String(id), success: false, reason: 'Device not found' })
+        continue
+      }
+
+      const targetIp = String(device.IPAddress || '').trim() || null
+      const targetPort = device.Port ?? null
+      if (!targetIp || !targetPort) {
+        results.push({ deviceId: String(device.DeviceID), deviceCode: device.DeviceCode, success: false, reason: 'Missing IP/Port' })
+        continue
+      }
+
+      if (!Number.isInteger(targetPort) || targetPort < 1 || targetPort > 65535) {
+        results.push({ deviceId: String(device.DeviceID), deviceCode: device.DeviceCode, success: false, reason: 'Invalid port' })
+        continue
+      }
+
+      if (!isPrivateIpv4(targetIp)) {
+        results.push({ deviceId: String(device.DeviceID), deviceCode: device.DeviceCode, success: false, reason: 'IP not private' })
+        continue
+      }
+
+      
+      try {
+        const bridgeRes = await tryBridgeSdk(device)
+        if (bridgeRes && bridgeRes.status >= 200 && bridgeRes.status < 300) {
+          const ok = !!bridgeRes.payload?.result?.success
+          results.push({
+            deviceId: String(device.DeviceID),
+            deviceCode: device.DeviceCode,
+            deviceName: device.DeviceName || null,
+            ip: targetIp,
+            port: targetPort,
+            success: ok,
+            mode: 'SDK',
+            latencyMs: bridgeRes.payload?.latencyMs ?? null,
+            reason: ok ? null : (bridgeRes.payload?.result?.step || ('SDK error ' + String(bridgeRes.payload?.result?.errorCode ?? '')))
+          })
+          continue
+        }
+      } catch (_) {}
+
+      const tcp = await tcpTest(targetIp, targetPort)
+      results.push({
+        deviceId: String(device.DeviceID),
+        deviceCode: device.DeviceCode,
+        deviceName: device.DeviceName || null,
+        ip: targetIp,
+        port: targetPort,
+        success: !!tcp.ok,
+        mode: 'TCP',
+        latencyMs: tcp.latencyMs,
+        reason: tcp.ok ? null : tcp.reason
+      })
+    }
+
+    return res.json({ success: true, results })
   } catch (err) {
     console.error(err)
     return res.status(500).json({ error: err.message })
@@ -2277,8 +2577,50 @@ app.post('/devices/heartbeat', async (req, res) => {
     return res.status(500).json({ error: err.message })
   }
 })
-// Export device logs (CSV) - currently exports BiometricScans for a device within an optional date range.
-// Body: { DeviceCode, From (YYYY-MM-DD or ISO), To (YYYY-MM-DD or ISO) }
+
+app.post('/devices/heartbeat-batch', async (req, res) => {
+  const deviceIds = Array.isArray(req.body?.deviceIds) ? req.body.deviceIds : []
+  const actor = req.body?.actor || 'UI_DEVICES'
+  if (!deviceIds.length) return res.status(400).json({ error: 'deviceIds is required' })
+  if (deviceIds.length > 500) return res.status(413).json({ error: 'Too many deviceIds (max 500).' })
+
+  try {
+    const pool = await getPool()
+    const request = pool.request()
+
+    const params = []
+    deviceIds.forEach((id, idx) => {
+      const key = `DeviceID${idx}`
+      params.push(`@${key}`)
+      request.input(key, sql.NVarChar(36), String(id))
+    })
+
+    const updated = await request.query(`
+      UPDATE dbo.Devices
+      SET LastSeenAt = GETDATE(), UpdatedAt = GETDATE()
+      WHERE DeviceID IN (${params.join(',')});
+      SELECT @@ROWCOUNT AS Updated;
+    `)
+
+    try {
+      await writeAuditLog(pool, {
+        actor,
+        action: 'DEVICE_HEARTBEAT_BATCH',
+        tableName: 'Devices',
+        recordID: null,
+        afterJson: JSON.stringify({ deviceIds, updated: updated.recordset?.[0]?.Updated ?? null }),
+        deviceID: null,
+        ipAddress: req.ip
+      })
+    } catch (_) {}
+
+    return res.json({ success: true, updated: updated.recordset?.[0]?.Updated ?? 0, serverTime: new Date().toISOString() })
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: err.message })
+  }
+})
+
 app.post('/devices/export-logs', async (req, res) => {
   const { DeviceCode, From, To } = req.body || {}
   const normalizedCode = String(DeviceCode || '').trim()
@@ -2394,8 +2736,6 @@ app.post('/devices/export-logs', async (req, res) => {
   }
 })
 
-// Import attendance logs from a Zwkq-style CSV export (from the TM200PC desktop exporter or similar).
-// Body: { DeviceCode, CsvText, CreateMissingEmployees?: boolean, OverwriteExisting?: boolean }
 app.post('/devices/import-attendance-csv', async (req, res) => {
   const { DeviceCode, CsvText, CreateMissingEmployees, OverwriteExisting } = req.body || {}
   const normalizedCode = String(DeviceCode || '').trim()
@@ -2475,8 +2815,6 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
     }
     if (parsed.length > 50_000) return res.status(413).json({ error: 'Too many rows (max 50,000 per import).' })
 
-    // Load employees for mapping Staff Code/User ID -> EmployeeID.
-    // Primary mapping should be Employees.BiometricStaffCode / Employees.BiometricUserID.
     const empRes = await pool.request().query('SELECT EmployeeID, EmployeeCode, BiometricStaffCode, BiometricUserID, FirstName, LastName, Department FROM dbo.Employees')
     const employeeByIdentifier = new Map()
     const addKey = (key, employee) => {
@@ -2523,7 +2861,6 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
 
       const insertReq = new sql.Request(transaction)
       insertReq.input('EmployeeID', sql.NVarChar(36), require('crypto').randomUUID())
-      // Make EmployeeCode equal the Staff Code from CSV so existing flows (attendance/log) can reference it directly.
       insertReq.input('EmployeeCode', sql.NVarChar(50), staffCodeForCreate)
       insertReq.input('FirstName', sql.NVarChar(100), safeFirst)
       insertReq.input('LastName', sql.NVarChar(100), safeLast)
@@ -2564,7 +2901,7 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
       return null
     }
 
-    const timesByEmployeeDate = new Map() // key: EmployeeID|YYYY-MM-DD -> Set(HH:mm:ss)
+    const timesByEmployeeDate = new Map()
 
     for (const p of parsed) {
       const employee = await resolveEmployee(p)
@@ -2574,8 +2911,6 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
       const staffCodeToStore = String(p.staffCodeRaw).trim()
       const userIdToStore = p.userIdRaw ? String(p.userIdRaw).trim() : null
 
-      // If we resolved an employee, but they don't yet have biometric identifiers, backfill them from the CSV
-      // so EmployeeTable can show Staff Code/User ID and future imports can map reliably.
       if (employeeID && (staffCodeToStore || userIdToStore)) {
         const updReq = new sql.Request(transaction)
         updReq.input('EmployeeID', sql.NVarChar(36), employeeID)
@@ -2632,7 +2967,6 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
       }
     }
 
-    // Update AttendanceRecords from imported times (chronological slots).
     let attendanceGroupsTouched = 0
     for (const [key, timesSet] of timesByEmployeeDate.entries()) {
       const [employeeID, dateIso] = key.split('|')
@@ -2728,8 +3062,6 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
   }
 })
 
-// Browse imported device attendance events (raw rows from CSV imports).
-// Query: ?deviceCode=88&from=2026-03-01&to=2026-03-31&top=1000
 app.get('/device-attendance-events', async (req, res) => {
   const deviceCode = String(req.query?.deviceCode || '').trim() || null
   const topRaw = Number.parseInt(String(req.query?.top || '').trim(), 10)
@@ -2793,7 +3125,6 @@ app.get('/device-attendance-events', async (req, res) => {
   }
 })
 
-// Biometric scans
 app.get('/biometric-scans', async (req, res) => {
   try {
     const pool = await getPool()
@@ -2831,7 +3162,6 @@ app.get('/biometric-scans', async (req, res) => {
 app.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {}
   if (username === 'admin' && password === 'admin') {
-    // super-simple session token (not secure; demo only)
     const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
     return res.json({ success: true, token, user: { username: 'admin', role: 'admin' } })
   }
@@ -2919,7 +3249,6 @@ app.post('/biometric-scans', async (req, res) => {
   }
 })
 
-// Audit logs
 app.get('/audit-logs', async (req, res) => {
   try {
     const pool = await getPool()
@@ -2969,7 +3298,6 @@ app.post('/audit-logs', async (req, res) => {
 app.get('/special-days', async (req, res) => res.json([]))
 app.post('/special-days', async (req, res) => res.status(501).json({ error: 'Special days are not implemented in new schema' }))
 
-// Today's attendance (compatibility for /attendance/today)
 app.get('/attendance/today', async (req, res) => {
   const t0 = Date.now()
   try {
@@ -3091,7 +3419,6 @@ app.get('/attendance/today', async (req, res) => {
   }
 })
 
-// Attendance by date range (inclusive)
 app.post('/attendance/range', async (req, res) => {
   const t0 = Date.now()
   const { from, to } = req.body || {}
@@ -3186,7 +3513,6 @@ app.post('/attendance/range', async (req, res) => {
   }
 })
 
-// Health endpoint to verify DB connection and row count
 app.get('/ping-db', async (req, res) => {
   try {
     const pool = await getPool()
@@ -3295,6 +3621,66 @@ app.put('/employees/:id', async (req, res) => {
   }
 })
 
+app.post('/employees/bulk-delete', async (req, res) => {
+  const idsRaw = req.body?.ids
+  const ids = Array.isArray(idsRaw)
+    ? Array.from(new Set(idsRaw.map(v => String(v || '').trim()).filter(Boolean)))
+    : []
+
+  if (!ids.length) return res.status(400).json({ error: 'No employee IDs provided.' })
+
+  let transaction = null
+  try {
+    const pool = await getPool()
+    transaction = new sql.Transaction(pool)
+    await transaction.begin()
+
+    const chunkSize = 500
+    let deletedTotal = 0
+
+    for (let offset = 0; offset < ids.length; offset += chunkSize) {
+      const chunk = ids.slice(offset, offset + chunkSize)
+      const request = new sql.Request(transaction)
+
+      chunk.forEach((id, idx) => {
+        request.input(`id${idx}`, sql.NVarChar(36), id)
+      })
+
+      const values = chunk.map((_, idx) => `(@id${idx})`).join(',')
+      const q = `
+        DECLARE @Ids TABLE (EmployeeID nvarchar(36) NOT NULL PRIMARY KEY);
+        INSERT INTO @Ids (EmployeeID) VALUES ${values};
+
+        DELETE FROM dbo.EmployeeShiftAllotments WHERE EmployeeID IN (SELECT EmployeeID FROM @Ids);
+        DELETE FROM dbo.AttendanceRecords WHERE EmployeeID IN (SELECT EmployeeID FROM @Ids);
+        DELETE FROM dbo.BiometricScans WHERE EmployeeID IN (SELECT EmployeeID FROM @Ids);
+        IF OBJECT_ID('dbo.DeviceAttendanceEvents','U') IS NOT NULL
+          DELETE FROM dbo.DeviceAttendanceEvents WHERE EmployeeID IN (SELECT EmployeeID FROM @Ids);
+        DELETE FROM dbo.FaceProfiles WHERE EmployeeID IN (SELECT EmployeeID FROM @Ids);
+        DELETE FROM dbo.Employees WHERE EmployeeID IN (SELECT EmployeeID FROM @Ids);
+
+        SELECT @@ROWCOUNT AS deletedEmployees;
+      `
+
+      const result = await request.query(q)
+      const deletedChunk = Number(result?.recordset?.[0]?.deletedEmployees || 0)
+      deletedTotal += Number.isFinite(deletedChunk) ? deletedChunk : 0
+    }
+
+    await transaction.commit()
+    res.json({ success: true, requested: ids.length, deleted: deletedTotal })
+  } catch (err) {
+    try {
+      if (transaction) await transaction.rollback()
+    } catch (_) {}
+    console.error(err)
+    if (err?.number === 547) {
+      return res.status(400).json({ error: 'Cannot delete employees because related records still exist.' })
+    }
+    res.status(500).json({ error: 'Bulk delete employees failed.' })
+  }
+})
+
 app.delete('/employees/:id', async (req, res) => {
   const id = req.params.id
   let transaction = null
@@ -3311,11 +3697,12 @@ app.delete('/employees/:id', async (req, res) => {
       return res.status(404).json({ error: 'Not found' })
     }
 
-    // Remove dependent rows first to avoid FK violations on employee delete.
     await request.query(`
       DELETE FROM dbo.EmployeeShiftAllotments WHERE EmployeeID=@EmployeeID;
       DELETE FROM dbo.AttendanceRecords WHERE EmployeeID=@EmployeeID;
       DELETE FROM dbo.BiometricScans WHERE EmployeeID=@EmployeeID;
+      IF OBJECT_ID('dbo.DeviceAttendanceEvents','U') IS NOT NULL
+        DELETE FROM dbo.DeviceAttendanceEvents WHERE EmployeeID=@EmployeeID;
       DELETE FROM dbo.FaceProfiles WHERE EmployeeID=@EmployeeID;
       DELETE FROM dbo.Employees WHERE EmployeeID=@EmployeeID;
     `)

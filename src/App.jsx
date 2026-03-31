@@ -21,7 +21,6 @@ const replacePath = (path) => {
 }
 
 export default function App() {
-  // Keep auth in localStorage so a page refresh preserves the session.
   const [token, setToken] = useState(() => localStorage.getItem('authToken'))
 
   const handleLoginSuccess = (data) => {
@@ -33,8 +32,6 @@ export default function App() {
     localStorage.removeItem('authToken')
     setToken(null)
     replacePath(LOGIN_PATH)
-    // optional refresh to clear any cached data
-    // window.location.reload()
   }
 
   const isAuthed = useMemo(() => Boolean(token), [token])

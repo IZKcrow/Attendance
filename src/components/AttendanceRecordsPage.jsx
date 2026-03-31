@@ -1,4 +1,4 @@
-//AttendanceRecordsPage.jsx
+﻿//AttendanceRecordsPage.jsx
 import React from 'react'
 import {
   TableCell,
@@ -9,8 +9,8 @@ import {
   InputLabel,
   Select,
   MenuItem,
-  Snackbar,
-  Alert
+  Autocomplete,
+  TextField
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
@@ -190,7 +190,6 @@ export default function AttendanceRecordsPage() {
   return (
     <>
       {SnackbarComponent}
-      <FaceScanForm onScanned={loadRecords} notify={show} />
       <ClockInForm onClockIn={loadRecords} notify={show} />
 
       <GenericDataTable
@@ -230,106 +229,10 @@ export default function AttendanceRecordsPage() {
   )
 }
 
-function FaceScanForm({ onScanned, notify }) {
-  const [employees, setEmployees] = React.useState([])
-  const [selectedCode, setSelectedCode] = React.useState('')
-  const [deviceCode, setDeviceCode] = React.useState('KIOSK-001')
-  const [devices, setDevices] = React.useState([])
-  const [scanning, setScanning] = React.useState(false)
-
-  React.useEffect(() => {
-    let mounted = true
-    api.fetchEmployees().then(data => { if (mounted) setEmployees(Array.isArray(data) ? data : []) }).catch(() => {})
-    api.fetchDevices().then(data => {
-      if (!mounted) return
-      const list = Array.isArray(data) ? data : []
-      setDevices(list)
-      if (list.length > 0 && !selectedCode) {
-        // keep existing deviceCode if set, otherwise default to first device
-        setDeviceCode(prev => prev || list[0].DeviceCode || 'KIOSK-001')
-      }
-    }).catch(() => {})
-    return () => { mounted = false }
-  }, [])
-
-  const doFaceScan = async () => {
-    if (!selectedCode) return notify?.('Select an employee for prototype face scan.', 'warning')
-    setScanning(true)
-    try {
-      const result = await api.faceScanAttendance({
-        employeeCode: selectedCode,
-        deviceCode,
-        matchScore: 99.0,
-        actor: 'FACE_SCANNER_UI'
-      })
-      onScanned && onScanned()
-      setSelectedCode('')
-      notify?.(
-        `Face scan success: ${result.employeeName || result.employeeCode} -> ${result.logType} at ${result.time || 'now'}`,
-        'success'
-      )
-    } catch (err) {
-      notify?.(getFriendlyAttendanceError(err, 'face'), 'error')
-    } finally {
-      setScanning(false)
-    }
-  }
-
-  return (
-    <Paper sx={{ ...formCardSx, mb: 2 }}>
-      <FormControl size="small" sx={selectSx}>
-        <InputLabel id="face-employee">Employee</InputLabel>
-        <Select
-          labelId="face-employee"
-          label="Employee"
-          value={selectedCode}
-          onChange={(e) => setSelectedCode(e.target.value)}
-        >
-          <MenuItem value=""><em>Face scan: select employee</em></MenuItem>
-          {employees.map(emp => (
-            <MenuItem key={emp.id || emp.EmployeeID} value={emp.EmployeeCode}>
-              {emp.EmployeeCode} - {emp.name || `${emp.FirstName || ''} ${emp.LastName || ''}`}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
-
-      <FormControl size="small" sx={selectSx}>
-        <InputLabel id="face-device">Device</InputLabel>
-        <Select
-          labelId="face-device"
-          label="Device"
-          value={deviceCode}
-          onChange={(e) => setDeviceCode(e.target.value)}
-        >
-          <MenuItem value=""><em>Select device</em></MenuItem>
-          {devices.map(dev => (
-            <MenuItem key={dev.DeviceID || dev.DeviceCode} value={dev.DeviceCode}>
-              {dev.DeviceCode} {dev.DeviceName ? `- ${dev.DeviceName}` : ''}
-            </MenuItem>
-          ))}
-          <MenuItem value="KIOSK-001">KIOSK-001 (default)</MenuItem>
-        </Select>
-      </FormControl>
-
-      <Box sx={{ flexGrow: 1 }} />
-
-      <Button
-        variant="contained"
-        size="medium"
-        onClick={doFaceScan}
-        disabled={scanning}
-        sx={primaryBtnSx}
-      >
-        {scanning ? 'Scanning...' : 'Simulate Face Scan'}
-      </Button>
-    </Paper>
-  )
-}
-
 function ClockInForm({ onClockIn, notify }) {
   const [employees, setEmployees] = React.useState([])
   const [selectedCode, setSelectedCode] = React.useState('')
+  const [employeeSearch, setEmployeeSearch] = React.useState('')
   const [logType, setLogType] = React.useState('MORNING_IN')
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -354,24 +257,50 @@ function ClockInForm({ onClockIn, notify }) {
     }
   }
 
+  const employeeOptions = React.useMemo(() => {
+    const list = Array.isArray(employees) ? employees : []
+    const toLabel = (emp) => {
+      const code = emp?.EmployeeCode || ''
+      const name = emp?.name || `${emp?.FirstName || ''} ${emp?.LastName || ''}`.trim()
+      const dept = emp?.department || ''
+      const base = `${code}${name ? ` - ${name}` : ''}`.trim()
+      return dept ? `${base} (${dept})` : base
+    }
+    return list
+      .map((emp) => ({
+        code: emp?.EmployeeCode || '',
+        label: toLabel(emp),
+        raw: emp
+      }))
+      .filter((o) => o.code)
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [employees])
+
+  const selectedEmployeeOption = React.useMemo(
+    () => employeeOptions.find((o) => o.code === selectedCode) || null,
+    [employeeOptions, selectedCode]
+  )
+
   return (
     <Paper sx={{ ...formCardSx, mb: 3 }}>
-      <FormControl size="small" sx={selectSx}>
-        <InputLabel id="clock-employee">Employee</InputLabel>
-        <Select
-          labelId="clock-employee"
-          label="Employee"
-          value={selectedCode}
-          onChange={(e) => setSelectedCode(e.target.value)}
-        >
-          <MenuItem value=""><em>Select employee</em></MenuItem>
-          {employees.map(emp => (
-            <MenuItem key={emp.id || emp.EmployeeID} value={emp.EmployeeCode}>
-              {emp.EmployeeCode} - {emp.name || `${emp.FirstName || ''} ${emp.LastName || ''}`}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      <Autocomplete
+        sx={selectSx}
+        size="small"
+        options={employeeOptions}
+        value={selectedEmployeeOption}
+        inputValue={employeeSearch}
+        onInputChange={(_e, v) => setEmployeeSearch(v)}
+        onChange={(_e, opt) => setSelectedCode(opt?.code || '')}
+        isOptionEqualToValue={(a, b) => a.code === b.code}
+        getOptionLabel={(opt) => opt?.label || ''}
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            label="Employee"
+            placeholder="Type name or code . . ."
+          />
+        )}
+      />
 
       <FormControl size="small" sx={selectSx}>
         <InputLabel id="clock-logtype">Log type</InputLabel>

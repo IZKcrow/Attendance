@@ -7,20 +7,38 @@ export function useSnackbar({
 } = {}) {
   const [snack, setSnack] = React.useState(null)
 
-  const show = (message, severity = 'info') => {
+  const show = (message, severityOrOptions = 'info') => {
     if (!message) return
-    setSnack({ message, severity })
+
+    if (severityOrOptions && typeof severityOrOptions === 'object') {
+      const {
+        severity = 'info',
+        action = null,
+        autoHideDuration: overrideDuration = autoHideDuration,
+        onClose = null
+      } = severityOrOptions
+      setSnack({ message, severity, action, autoHideDuration: overrideDuration, onClose })
+      return
+    }
+
+    const severity = typeof severityOrOptions === 'string' ? severityOrOptions : 'info'
+    setSnack({ message, severity, action: null, autoHideDuration, onClose: null })
   }
+
+  const hide = () => setSnack(null)
 
   const handleClose = (_, reason) => {
     if (reason === 'clickaway') return
+    if (typeof snack?.onClose === 'function') {
+      try { snack.onClose() } catch (_) {}
+    }
     setSnack(null)
   }
 
   const SnackbarComponent = (
     <Snackbar
       open={!!snack}
-      autoHideDuration={autoHideDuration}
+      autoHideDuration={snack && snack.autoHideDuration !== undefined ? snack.autoHideDuration : autoHideDuration}
       onClose={handleClose}
       anchorOrigin={anchorOrigin}
     >
@@ -29,11 +47,12 @@ export function useSnackbar({
         severity={snack?.severity || 'info'}
         variant="filled"
         sx={{ width: '100%' }}
+        action={snack?.action || null}
       >
         {snack?.message}
       </Alert>
     </Snackbar>
   )
 
-  return { show, SnackbarComponent }
+  return { show, hide, SnackbarComponent }
 }

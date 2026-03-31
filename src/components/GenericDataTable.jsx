@@ -6,7 +6,6 @@ import {
   Box, TextField, CircularProgress, Alert, TablePagination, InputAdornment
 } from '@mui/material'
 import EditIcon from '@mui/icons-material/Edit'
-import DeleteIcon from '@mui/icons-material/Delete'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
 import { useSnackbar } from './ui/Snackbar'
@@ -32,8 +31,28 @@ export default function GenericDataTable({
   useDeleteDialog = true
 }) {
   const { show, SnackbarComponent } = useSnackbar()
-  const showActions = allowEdit || allowDelete
-  const dialogColumns = React.useMemo(() => (Array.isArray(formColumns) ? formColumns : columns), [formColumns, columns])
+  // Per-row delete is intentionally hidden (bulk deletion is used instead).
+  const showActions = allowEdit
+
+  const columnDefs = React.useMemo(() => {
+    const cols = Array.isArray(columns) ? columns : []
+    return cols.map((col, idx) => {
+      if (typeof col === 'string') return { key: col, label: col, header: null }
+      if (React.isValidElement(col)) return { key: `col_${idx}`, label: '', header: col }
+      if (col && typeof col === 'object') {
+        const key = col.key || col.label || `col_${idx}`
+        const label = col.label ?? col.key ?? ''
+        const header = col.header ?? null
+        return { key, label, header }
+      }
+      return { key: `col_${idx}`, label: String(col ?? ''), header: null }
+    })
+  }, [columns])
+
+  const dialogColumns = React.useMemo(() => {
+    if (Array.isArray(formColumns)) return formColumns
+    return columnDefs.map((c) => c.label || c.key)
+  }, [formColumns, columnDefs])
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editing, setEditing] = React.useState(null)
   const [form, setForm] = React.useState({})
@@ -220,13 +239,17 @@ export default function GenericDataTable({
         >
           <TableHead>
             <TableRow>
-              {columns.map(col => <TableCell key={col}><strong>{col}</strong></TableCell>)}
+              {columnDefs.map(col => (
+                <TableCell key={col.key}>
+                  {col.header ? col.header : <strong>{col.label}</strong>}
+                </TableCell>
+              ))}
               {showActions && <TableCell align="right" sx={{ minWidth: 110 }}><strong>Actions</strong></TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
-            {loading && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center"><CircularProgress /></TableCell></TableRow>}
-            {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={columns.length + (showActions ? 1 : 0)} align="center">No matching records</TableCell></TableRow>}
+            {loading && <TableRow><TableCell colSpan={columnDefs.length + (showActions ? 1 : 0)} align="center"><CircularProgress /></TableCell></TableRow>}
+            {!loading && filtered.length === 0 && <TableRow><TableCell colSpan={columnDefs.length + (showActions ? 1 : 0)} align="center">No matching records</TableCell></TableRow>}
             {!loading && displayed.map((row) => (
               <TableRow
                 key={row[primaryKeyField]}
@@ -244,9 +267,6 @@ export default function GenericDataTable({
                     <>
                       {allowEdit && (
                         <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}><EditIcon fontSize="small" /></IconButton>
-                      )}
-                      {allowDelete && (
-                        <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleDeleteClick(row) }}><DeleteIcon fontSize="small" /></IconButton>
                       )}
                     </>
                   )}
