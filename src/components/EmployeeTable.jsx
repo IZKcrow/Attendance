@@ -39,7 +39,7 @@ import { fetchEmployeeAssignments } from '../api'
 import { useSnackbar } from './ui/Snackbar'
 
 function formatSqlTime(value) {
-  if (!value) return 'â€”'
+  if (!value) return '-'
   if (typeof value === 'string') {
     if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
     if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(value)) return value.slice(11, 16)
@@ -53,7 +53,7 @@ function formatSqlTime(value) {
 }
 
 function formatDayList(value) {
-  if (!value) return 'â€”'
+  if (!value) return '-'
   return String(value)
     .split(',')
     .map((s) => s.trim())
@@ -99,8 +99,8 @@ function EmployeeRow({ e, selected, onToggleSelect, onEdit, onView }) {
       </TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.position}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.department}</TableCell>
-      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricStaffCode || 'â€”'}</TableCell>
-      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricUserId || 'â€”'}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricStaffCode || '-'}</TableCell>
+      <TableCell sx={{ color: 'var(--text)' }}>{e.biometricUserId || '-'}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.assignedShift || 'N/A'}</TableCell>
       <TableCell sx={{ color: 'var(--text)' }}>{e.phone}</TableCell>
       <TableCell align="right">
@@ -533,7 +533,7 @@ export default function EmployeeTable() {
 function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
   if (!employee) return null
   const scheduleDetails = employee.scheduleDetails || employee.ScheduleDetails || []
-  const shiftName = employee.assignedShift || employee.AssignedShift || 'â€”'
+  const shiftName = employee.assignedShift || employee.AssignedShift || '-'
   const initials =
     (employee.name || '')
       .split(' ')
@@ -559,9 +559,9 @@ function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
         </Stack>
 
         <Grid container spacing={1.2} sx={{ mb: 2 }}>
-          <Detail label="Position" value={employee.position || 'â€”'} />
-          <Detail label="Department" value={employee.department || 'â€”'} />
-          <Detail label="Phone" value={employee.phone || 'â€”'} />
+          <Detail label="Position" value={employee.position || '-'} />
+          <Detail label="Department" value={employee.department || '-'} />
+          <Detail label="Phone" value={employee.phone || '-'} />
           <Detail label="Assigned Shift" value={shiftName} />
         </Grid>
 
@@ -578,7 +578,7 @@ function EmployeeDetailsDialog({ open, onClose, employee, loading }) {
                   {s.PeriodName || s.name || s.ShiftName || `Pattern ${idx + 1}`}
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                  Days: {s.DayNameList || formatDayList(s.DayList) || 'â€”'}
+                  Days: {s.DayNameList || formatDayList(s.DayList) || '-'}
                 </Typography>
                 <Typography variant="body2" sx={{ color: 'text.secondary' }}>
                   Morning: {formatSqlTime(s.MorningTimeIn || s.morningIn)} - {formatSqlTime(s.MorningTimeOut || s.morningOut)}
@@ -615,6 +615,7 @@ function Detail({ label, value }) {
     </Grid>
   )
 }
+
 
 
 

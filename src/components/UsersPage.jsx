@@ -1,25 +1,32 @@
-//UsersPage.jsx
+﻿//UsersPage.jsx
 import React from 'react'
-import { TableCell } from '@mui/material'
+import { TableCell, Button, Box } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
 import { useSnackbar } from './ui/Snackbar'
 
+function fmtDateTime(value) {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value)
+  return d.toLocaleString()
+}
+
 export default function UsersPage() {
   const { show, SnackbarComponent } = useSnackbar()
-  const [users, setUsers] = React.useState([])
+  const [admins, setAdmins] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
 
   React.useEffect(() => {
-    loadUsers()
+    loadAdmins()
   }, [])
 
-  const loadUsers = async () => {
+  const loadAdmins = async () => {
     try {
       setLoading(true)
-      const data = await api.fetchUsers()
-      setUsers(Array.isArray(data) ? data : [])
+      const data = await api.fetchAdminUsers()
+      setAdmins(Array.isArray(data) ? data : [])
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -29,59 +36,67 @@ export default function UsersPage() {
     }
   }
 
-  const handleAdd = async (form) => {
-    try {
-      const result = await api.createUser(form)
-      setUsers([...users, result])
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-      show(`Create failed: ${err.message || err}`, 'error')
-    }
-  }
+  const inviteAdmin = async () => {
+    const email = (window.prompt('Invite new admin (email):') || '').trim()
+    if (!email) return
 
-  const handleEdit = async (form) => {
     try {
-      const result = await api.updateUser(form.UserID, form)
-      setUsers(users.map(u => u.UserID === form.UserID ? result : u))
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-      show(`Update failed: ${err.message || err}`, 'error')
-    }
-  }
+      const res = await api.createAdminInvitation(email)
+      const registerPath = res?.registerPath
+      const url = registerPath
+        ? `${window.location.origin}${registerPath}`
+        : null
 
-  const handleDelete = async (id) => {
-    try {
-      await api.deleteUser(id)
-      setUsers(users.filter(u => u.UserID !== id))
-      setError(null)
-      show('User deleted.', 'success')
+      if (url) {
+        try {
+          await navigator.clipboard.writeText(url)
+          show('Invitation link copied to clipboard.', 'success')
+        } catch (_) {
+          show('Invitation created. Copy from console (clipboard blocked).', 'info')
+        }
+        console.log('Admin invitation link:', url)
+      } else {
+        show('Invitation created.', 'success')
+      }
     } catch (err) {
-      setError(err.message)
-      show(`Delete failed: ${err.message || err}`, 'error')
+      show(`Invite failed: ${err.message || err}`, 'error')
     }
   }
 
   return (
     <>
       {SnackbarComponent}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+        <Button
+          variant="contained"
+          onClick={inviteAdmin}
+          sx={{
+            backgroundColor: 'var(--primary)',
+            fontWeight: 800,
+            textTransform: 'none',
+            ':hover': { backgroundColor: 'var(--primary-dark)' }
+          }}
+        >
+          Invite Admin
+        </Button>
+      </Box>
+
       <GenericDataTable
-        title="Users"
-        columns={['name', 'position', 'email', 'department']}
-        data={users}
+        title="Admins"
+        columns={['Email', 'Created', 'Last Login']}
+        data={admins}
         loading={loading}
         error={error}
-        primaryKeyField="UserID"
-        onAdd={handleAdd}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
+        primaryKeyField="Email"
+        readOnly={true}
+        onAdd={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
         renderRow={(row) => (
           <>
-            <TableCell>{row.name}</TableCell>
-            <TableCell>{row.position}</TableCell>
-            <TableCell>{row.email}</TableCell>
-            <TableCell>{row.department}</TableCell>
+            <TableCell>{row.Email || row.email}</TableCell>
+            <TableCell>{fmtDateTime(row.CreatedAt || row.createdAt)}</TableCell>
+            <TableCell>{fmtDateTime(row.LastLoginAt || row.lastLoginAt)}</TableCell>
           </>
         )}
       />

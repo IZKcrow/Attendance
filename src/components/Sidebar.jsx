@@ -1,4 +1,4 @@
-//Sidebar.jsx
+﻿//Sidebar.jsx
 import React from 'react'
 import {
   Box, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
@@ -9,7 +9,6 @@ import EventNoteIcon from '@mui/icons-material/EventNote'
 import AssignmentIcon from '@mui/icons-material/Assignment'
 import TimerIcon from '@mui/icons-material/Timer'
 import BusinessIcon from '@mui/icons-material/Business'
-import VisibilityIcon from '@mui/icons-material/Visibility'
 import LogoutIcon from '@mui/icons-material/Logout'
 import HistoryIcon from '@mui/icons-material/History'
 import DevicesOtherIcon from '@mui/icons-material/DevicesOther'
@@ -33,12 +32,12 @@ const ATTENDANCE_GROUP = [
   { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
   { id: 'attendance-report', label: 'Attendance Report', icon: AssignmentIcon },
   { id: 'device-attendance-events', label: 'Imported Logs', icon: HistoryIcon },
-  { id: 'biometric', label: 'Biometric Scans', icon: VisibilityIcon }
+  { id: 'reports', label: 'Generate Report', icon: AssignmentIcon }
 ]
 
 const OTHER_ITEMS = [
   { id: 'special-days', label: 'Special Days', icon: LogoutIcon },
-  { id: 'audit-logs', label: 'Audit Logs', icon: HistoryIcon }
+  { id: 'audit-logs', label: 'Logs', icon: HistoryIcon }
 ]
 
 export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, onLogout }) {
@@ -84,7 +83,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
       onMouseLeave={() => onHover?.(false)}
       >
       <Box sx={{ p: 2, textAlign: 'center', fontWeight: 'bold', fontSize: '18px', color: textColor }}>
-        {expanded ? 'Menu' : '☰'}
+        {expanded ? 'Menu' : 'â˜°'}
       </Box>
       <Box
         sx={{
@@ -250,3 +249,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
     </Drawer>
   )
 }
+
+
+
+

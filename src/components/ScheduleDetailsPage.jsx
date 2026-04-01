@@ -210,7 +210,7 @@ export default function ScheduleDetailsPage() {
   }
 
   return (
-    <div className="schedule-wrapper">
+    <div>
       {SnackbarComponent}
       <div className="schedule-card" style={{ marginBottom: 20 }}>
         <div className="schedule-header">
@@ -258,7 +258,7 @@ export default function ScheduleDetailsPage() {
         />
       </div>
 
-      <Dialog
+      <Dialog  
         open={showForm}
         onClose={() => setShowForm(false)}
         maxWidth="md"

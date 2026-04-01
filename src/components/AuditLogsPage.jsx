@@ -1,4 +1,4 @@
-//AuditLogsPage.jsx
+﻿//AuditLogsPage.jsx
 import React from 'react'
 import { TableCell, Box } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
@@ -67,7 +67,7 @@ export default function AuditLogsPage() {
     }
   }
 
-  const filtered = logs.filter(l => {
+  const filtered = logs.filter((l) => {
     const [start, end] = dateRange
     if (!start && !end) return true
     const t = l.CreatedAt ? new Date(l.CreatedAt) : null
@@ -75,7 +75,7 @@ export default function AuditLogsPage() {
     if (start && t < new Date(start)) return false
     if (end) {
       const e = new Date(end)
-      e.setHours(23,59,59,999)
+      e.setHours(23, 59, 59, 999)
       if (t > e) return false
     }
     return true
@@ -83,12 +83,15 @@ export default function AuditLogsPage() {
 
   const chartData = React.useMemo(() => {
     const map = {}
-    filtered.forEach(s => {
-      const d = s.CreatedAt ? (new Date(s.CreatedAt)).toISOString().split('T')[0] : 'unknown'
+    filtered.forEach((s) => {
+      const d = s.CreatedAt ? new Date(s.CreatedAt).toISOString().split('T')[0] : 'unknown'
       map[d] = (map[d] || 0) + 1
     })
     const keys = Object.keys(map).sort()
-    return { labels: keys, datasets: [{ label: 'Events', data: keys.map(k => map[k]), backgroundColor: '#3f51b5' }] }
+    return {
+      labels: keys,
+      datasets: [{ label: 'Events', data: keys.map((k) => map[k]), backgroundColor: '#3f51b5' }]
+    }
   }, [filtered])
 
   return (
@@ -99,30 +102,48 @@ export default function AuditLogsPage() {
             startText="From"
             endText="To"
             value={dateRange}
-            onChange={(newValue) => { setDateRange(newValue) }}
+            onChange={(newValue) => {
+              setDateRange(newValue)
+            }}
             renderInput={(startProps, endProps) => (
               <>
-                <input {...startProps.inputProps} type="date" value={startProps.inputProps.value || ''} onChange={(e)=>{
-                  const s = e.target.value ? new Date(e.target.value) : null
-                  setDateRange([s, dateRange[1]])
-                }} />
+                <input
+                  {...startProps.inputProps}
+                  type="date"
+                  value={startProps.inputProps.value || ''}
+                  onChange={(e) => {
+                    const s = e.target.value ? new Date(e.target.value) : null
+                    setDateRange([s, dateRange[1]])
+                  }}
+                />
                 <span style={{ margin: '0 8px' }}>—</span>
-                <input {...endProps.inputProps} type="date" value={endProps.inputProps.value || ''} onChange={(e)=>{
-                  const d = e.target.value ? new Date(e.target.value) : null
-                  setDateRange([dateRange[0], d])
-                }} />
+                <input
+                  {...endProps.inputProps}
+                  type="date"
+                  value={endProps.inputProps.value || ''}
+                  onChange={(e) => {
+                    const d = e.target.value ? new Date(e.target.value) : null
+                    setDateRange([dateRange[0], d])
+                  }}
+                />
               </>
             )}
           />
         </LocalizationProvider>
-        <button onClick={()=>{ setDateRange([null, null]); }}>Clear</button>
+        <button
+          onClick={() => {
+            setDateRange([null, null])
+          }}
+        >
+          Clear
+        </button>
       </div>
 
       <div style={{ display: 'flex', gap: 16 }}>
         <div style={{ flex: 1 }}>
           <GenericDataTable
-            title="Audit Logs"
-            columns={['Action', 'TableName', 'CreatedAt']}
+            title="Logs"
+            columns={['Admin', 'Action', 'Table', 'Created At']}
             data={filtered}
             loading={loading}
             error={error}
@@ -133,6 +154,7 @@ export default function AuditLogsPage() {
             onDelete={() => {}}
             renderRow={(row) => (
               <>
+                <TableCell>{row.Actor || '-'}</TableCell>
                 <TableCell>{row.Action}</TableCell>
                 <TableCell>{row.TableName}</TableCell>
                 <TableCell>{fmtDateTime(row.CreatedAt)}</TableCell>
@@ -151,4 +173,3 @@ export default function AuditLogsPage() {
     </div>
   )
 }
-

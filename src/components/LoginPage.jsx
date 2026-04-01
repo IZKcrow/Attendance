@@ -1,7 +1,6 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { login } from '../api'
 import DarkVeil from './ui/DarkVeil'
-
 
 export default function LoginPage({ onSuccess }) {
   const [username, setUsername] = useState('')
@@ -13,7 +12,7 @@ export default function LoginPage({ onSuccess }) {
     e.preventDefault()
     setError(null)
     if (!username.trim() || !password.trim()) {
-      setError('Please enter both username and password.')
+      setError('Please enter both email and password.')
       return
     }
     try {
@@ -23,7 +22,7 @@ export default function LoginPage({ onSuccess }) {
       onSuccess?.(data)
     } catch (err) {
       if (err?.status === 401) {
-        setError('Invalid username or password.')
+        setError('Invalid email or password.')
       } else if (err?.message) {
         setError(err.message)
       } else {
@@ -85,7 +84,9 @@ export default function LoginPage({ onSuccess }) {
           boxShadow: '0 14px 34px rgba(0,0,0,0.45)'
         }}
       >
-        <h3 style={{ marginTop: 0, color: '#f8fbff', textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>Login</h3>
+        <h3 style={{ marginTop: 0, color: '#f8fbff', textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
+          Admin Login
+        </h3>
         {error && (
           <div role="alert" aria-live="polite" style={{ color: '#ffd8d8', marginBottom: 8, fontWeight: 600 }}>
             {error}
@@ -99,7 +100,7 @@ export default function LoginPage({ onSuccess }) {
               setUsername(e.target.value)
               if (error) setError(null)
             }}
-            placeholder="Username"
+            placeholder="Email"
             style={input}
           />
           <input
@@ -113,12 +114,45 @@ export default function LoginPage({ onSuccess }) {
             placeholder="Password"
             style={input}
           />
-          <button className="login-glass-input" type="submit" disabled={loading} style={{ ...input, cursor: 'pointer' }}>
+          <button
+            className="login-glass-input"
+            type="submit"
+            disabled={loading}
+            style={{ ...input, cursor: 'pointer' }}
+          >
             {loading ? 'Signing in...' : 'Login'}
           </button>
         </form>
-        <p style={{ fontSize: 12, color: '#e2ebff', marginBottom: 0, textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
-          Demo account: admin / admin
+        <p
+          style={{
+            fontSize: 12,
+            color: '#e2ebff',
+            marginBottom: 0,
+            textShadow: '0 2px 10px rgba(0,0,0,0.45)'
+          }}
+        >
+          First time setup?{' '}
+          <a
+            href="/register-admin"
+            onClick={(e) => {
+              e.preventDefault()
+              window.location.href = '/register-admin'
+            }}
+            style={{ color: '#e2ebff', fontWeight: 800 }}
+          >
+            Create the first admin
+          </a>
+          {' · '}
+          <a
+            href="/forgot-password"
+            onClick={(e) => {
+              e.preventDefault()
+              window.location.href = '/forgot-password'
+            }}
+            style={{ color: '#e2ebff', fontWeight: 800 }}
+          >
+            Forgot password
+          </a>
         </p>
       </div>
     </div>

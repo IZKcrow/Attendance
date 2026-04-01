@@ -2,6 +2,7 @@
 const cors = require('cors')
 const bodyParser = require('body-parser')
 const sql = require('mssql')
+const crypto = require('crypto')
 
 const app = express()
 const PORT = process.env.PORT || 4000
@@ -254,6 +255,15 @@ async function writeAuditLog(pool, payload) {
   }
 }
 
+function resolveAuditActor(req, fallback) {
+  try {
+    const adminEmail = (req && req.authUser && req.authUser.email) ? String(req.authUser.email).trim() : ''
+    if (adminEmail) return adminEmail
+  } catch (_) {}
+  const fb = String(fallback || '').trim()
+  return fb || 'SYSTEM'
+}
+
 async function initDbIfNeeded(pool) {
 
   const tableStatements = [
@@ -288,9 +298,9 @@ BEGIN
     ExternalShiftName NVARCHAR(100) NULL,
     ExternalConfigJson NVARCHAR(MAX) NULL,
     MorningTimeIn TIME(7) NOT NULL,
-    MorningTimeOut TIME(7) NOT NULL,
-    AfternoonTimeIn TIME(7) NOT NULL,
-    AfternoonTimeOut TIME(7) NOT NULL,
+    MorningTimeOut TIME(7) NULL,
+    AfternoonTimeIn TIME(7) NULL,
+    AfternoonTimeOut TIME(7) NULL,
     GracePeriodMinutes INT DEFAULT 5,
     CreatedAt DATETIME DEFAULT GETDATE(),
     UpdatedAt DATETIME NULL
@@ -717,7 +727,65 @@ END`,
 BEGIN
   ALTER TABLE dbo.Devices ADD DevicePassword INT NULL
 END`
-    ]
+    ,
+      `IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'MorningTimeOut' AND is_nullable = 0)
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ALTER COLUMN MorningTimeOut TIME(7) NULL
+END`,
+      `IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'AfternoonTimeIn' AND is_nullable = 0)
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ALTER COLUMN AfternoonTimeIn TIME(7) NULL
+END`,
+      `IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'AfternoonTimeOut' AND is_nullable = 0)
+BEGIN
+  ALTER TABLE dbo.ShiftDefinitions ALTER COLUMN AfternoonTimeOut TIME(7) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AppUsers' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AppUsers (
+    UserID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    Email NVARCHAR(255) NOT NULL UNIQUE,
+    PasswordHash NVARCHAR(500) NOT NULL,
+    Role NVARCHAR(30) NOT NULL DEFAULT 'ADMIN',
+    IsActive BIT NOT NULL DEFAULT 1,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    LastLoginAt DATETIME NULL
+  )
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AdminInvitations' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AdminInvitations (
+    InvitationID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    Email NVARCHAR(255) NULL,
+    TokenHash VARBINARY(32) NOT NULL,
+    ExpiresAt DATETIME NOT NULL,
+    UsedAt DATETIME NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    CreatedByUserID UNIQUEIDENTIFIER NULL,
+    FOREIGN KEY (CreatedByUserID) REFERENCES dbo.AppUsers(UserID)
+  )
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UQ_AdminInvitations_TokenHash' AND object_id = OBJECT_ID('dbo.AdminInvitations'))
+BEGIN
+  CREATE UNIQUE INDEX UQ_AdminInvitations_TokenHash ON dbo.AdminInvitations(TokenHash)
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AdminPasswordResets' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AdminPasswordResets (
+    ResetID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    UserID UNIQUEIDENTIFIER NOT NULL,
+    Email NVARCHAR(255) NOT NULL,
+    TokenHash VARBINARY(32) NOT NULL,
+    ExpiresAt DATETIME NOT NULL,
+    UsedAt DATETIME NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES dbo.AppUsers(UserID) ON DELETE CASCADE
+  )
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UQ_AdminPasswordResets_TokenHash' AND object_id = OBJECT_ID('dbo.AdminPasswordResets'))
+BEGIN
+  CREATE UNIQUE INDEX UQ_AdminPasswordResets_TokenHash ON dbo.AdminPasswordResets(TokenHash)
+END`]
     for (const m of migrationStatements) {
       await pool.request().query(m)
     }
@@ -744,6 +812,396 @@ async function getPool() {
   }
   return poolPromise
 }
+// --- Auth (Admin accounts) -------------------------------------------------
+const AUTH_SECRET = process.env.AUTH_SECRET || 'DEV_ONLY_CHANGE_ME'
+if (AUTH_SECRET === 'DEV_ONLY_CHANGE_ME') {
+  console.warn('WARNING: AUTH_SECRET is using the default value. Set AUTH_SECRET in production.')
+}
+
+function b64urlEncode(input) {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(String(input))
+  return buf.toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_')
+}
+
+function b64urlDecode(str) {
+  const s = String(str || '').replace(/-/g, '+').replace(/_/g, '/')
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4))
+  return Buffer.from(s + pad, 'base64')
+}
+
+function signToken(payload, ttlSeconds = 7 * 24 * 60 * 60) {
+  const header = { alg: 'HS256', typ: 'JWT' }
+  const now = Math.floor(Date.now() / 1000)
+  const body = { ...payload, iat: now, exp: now + ttlSeconds }
+  const h = b64urlEncode(JSON.stringify(header))
+  const p = b64urlEncode(JSON.stringify(body))
+  const data = `${h}.${p}`
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(data).digest()
+  return `${data}.${b64urlEncode(sig)}`
+}
+
+function verifyToken(token) {
+  try {
+    const parts = String(token || '').split('.')
+    if (parts.length !== 3) return null
+    const [h, p, s] = parts
+    const data = `${h}.${p}`
+    const expected = crypto.createHmac('sha256', AUTH_SECRET).update(data).digest()
+    const actual = b64urlDecode(s)
+    if (expected.length !== actual.length) return null
+    if (!crypto.timingSafeEqual(expected, actual)) return null
+    const payload = JSON.parse(b64urlDecode(p).toString('utf8'))
+    const now = Math.floor(Date.now() / 1000)
+    if (payload?.exp && now > payload.exp) return null
+    return payload
+  } catch (_) {
+    return null
+  }
+}
+
+function getBearerToken(req) {
+  const h = String(req.headers.authorization || '')
+  const m = h.match(/^Bearer\s+(.+)$/i)
+  if (m) return m[1]
+  const cookie = String(req.headers.cookie || '')
+  const cm = cookie.match(/(?:^|;\s*)authToken=([^;]+)/)
+  if (cm) return decodeURIComponent(cm[1])
+  return null
+}
+
+function hashPassword(password, opts = {}) {
+  const iters = Number(opts.iterations || 120000)
+  const salt = opts.salt || crypto.randomBytes(16)
+  const dk = crypto.pbkdf2Sync(String(password), salt, iters, 32, 'sha256')
+  return `pbkdf2$${iters}$${b64urlEncode(salt)}$${b64urlEncode(dk)}`
+}
+
+function verifyPassword(password, stored) {
+  try {
+    const s = String(stored || '')
+    let iters = 0
+    let saltB64 = ''
+    let hashB64 = ''
+
+    let m = s.match(/^pbkdf2\$(\d+)\$([^$]+)\$([^$]+)$/)
+    if (m) {
+      iters = Number(m[1])
+      saltB64 = m[2]
+      hashB64 = m[3]
+    } else {
+      m = s.match(/^pbkdf2(\d+)([A-Za-z0-9_-]{22})([A-Za-z0-9_-]{43})$/)
+      if (!m) return false
+      iters = Number(m[1])
+      saltB64 = m[2]
+      hashB64 = m[3]
+    }
+
+    const salt = b64urlDecode(saltB64)
+    const expected = b64urlDecode(hashB64)
+    const actual = crypto.pbkdf2Sync(String(password), salt, iters, expected.length, 'sha256')
+    if (actual.length !== expected.length) return false
+    return crypto.timingSafeEqual(actual, expected)
+  } catch (_) {
+    return false
+  }
+}
+
+function isLegacyPasswordHash(stored) {
+  const s = String(stored || '')
+  return s.startsWith('pbkdf2') && !s.startsWith('pbkdf2$')
+}
+
+async function hasAnyAdminAuth(pool) {
+  try {
+    const r = await pool.request().query("SELECT COUNT(1) AS cnt FROM dbo.AppUsers WHERE Role='ADMIN' AND IsActive=1")
+    return (r.recordset?.[0]?.cnt || 0) > 0
+  } catch (e) {
+    const msg = String(e?.message || e)
+    if (msg.toLowerCase().includes('invalid object name') && msg.toLowerCase().includes('appusers')) {
+      return false
+    }
+    throw e
+  }
+}
+
+function authOptional(req, _res, next) {
+  const token = getBearerToken(req)
+  const payload = token ? verifyToken(token) : null
+  req.authUser = payload && payload.email ? payload : null
+  next()
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.authUser) return res.status(401).json({ error: 'Unauthorized' })
+  if (String(req.authUser.role || '').toUpperCase() !== 'ADMIN') return res.status(403).json({ error: 'Forbidden' })
+  next()
+}
+
+app.use(authOptional)
+
+app.get('/auth/bootstrap-status', async (req, res) => {
+  try {
+    const pool = await getPool()
+    const ok = await hasAnyAdminAuth(pool)
+    res.json({ hasAdmin: ok })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/auth/setup-admin', async (req, res) => {
+  const email = String(req.body?.email || req.body?.username || '').trim().toLowerCase()
+  const password = String(req.body?.password || '').trim()
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email is required' })
+  if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
+
+  try {
+    const pool = await getPool()
+
+    const already = await hasAnyAdminAuth(pool)
+    if (already) return res.status(409).json({ error: 'Admin already exists. Use an invitation token.' })
+
+    const { randomUUID } = require('crypto')
+    const userId = randomUUID()
+
+    await pool.request()
+      .input('UserID', sql.NVarChar(36), userId)
+      .input('Email', sql.NVarChar(255), email)
+      .input('PasswordHash', sql.NVarChar(500), hashPassword(password))
+      .input('Role', sql.NVarChar(30), 'ADMIN')
+      .query('INSERT INTO dbo.AppUsers (UserID, Email, PasswordHash, Role, IsActive) VALUES (@UserID, @Email, @PasswordHash, @Role, 1)')
+
+    const token = signToken({ sub: userId, email, role: 'ADMIN' })
+    res.json({ success: true, token, user: { email, role: 'ADMIN' } })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/auth/login', async (req, res) => {
+  const email = String(req.body?.email || req.body?.username || '').trim().toLowerCase()
+  const password = String(req.body?.password || '').trim()
+
+  if (!email || !password) return res.status(400).json({ error: 'email and password are required' })
+
+  try {
+    const pool = await getPool()
+
+    if (email === 'admin' && password === 'admin') {
+      const already = await hasAnyAdminAuth(pool)
+      if (!already) {
+        const token = signToken({ sub: 'bootstrap', email: 'bootstrap-admin', role: 'ADMIN' }, 60 * 60)
+        return res.json({ success: true, token, user: { email: 'bootstrap-admin', role: 'ADMIN' }, bootstrap: true })
+      }
+    }
+
+    const r = await pool.request()
+      .input('Email', sql.NVarChar(255), email)
+      .query('SELECT TOP 1 UserID, Email, PasswordHash, Role, IsActive FROM dbo.AppUsers WHERE LOWER(Email)=@Email')
+
+    if (!r.recordset?.length) return res.status(401).json({ error: 'Invalid credentials' })
+    const u = r.recordset[0]
+    if (!u.IsActive) return res.status(403).json({ error: 'Account disabled' })
+
+    const storedHash = String(u.PasswordHash || '')
+    if (!verifyPassword(password, storedHash)) return res.status(401).json({ error: 'Invalid credentials' })
+
+    const upgradeHash = isLegacyPasswordHash(storedHash) ? hashPassword(password) : null
+    await pool.request()
+      .input('UserID', sql.NVarChar(36), u.UserID)
+      .input('PasswordHash', sql.NVarChar(500), upgradeHash)
+      .query(upgradeHash
+        ? 'UPDATE dbo.AppUsers SET PasswordHash=@PasswordHash, LastLoginAt=GETDATE() WHERE UserID=@UserID'
+        : 'UPDATE dbo.AppUsers SET LastLoginAt=GETDATE() WHERE UserID=@UserID')
+
+    const token = signToken({ sub: String(u.UserID), email: String(u.Email), role: String(u.Role) })
+    res.json({ success: true, token, user: { email: u.Email, role: u.Role } })
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('invalid object name') && msg.toLowerCase().includes('appusers')) {
+      return res.status(503).json({ error: 'Auth tables are not initialized yet. Restart the backend server to run migrations.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.get('/auth/me', async (req, res) => {
+  if (!req.authUser) return res.status(401).json({ error: 'Unauthorized' })
+  res.json({ user: { email: req.authUser.email, role: req.authUser.role } })
+})
+
+app.get('/auth/admin-users', requireAdmin, async (req, res) => {
+  try {
+    const pool = await getPool()
+    const r = await pool.request().query(`
+      SELECT Email, Role, CreatedAt, LastLoginAt
+      FROM dbo.AppUsers
+      WHERE Role='ADMIN' AND IsActive=1
+      ORDER BY CreatedAt DESC
+    `)
+    res.json(r.recordset || [])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/auth/invitations', requireAdmin, async (req, res) => {
+  const inviteEmail = String(req.body?.email || '').trim().toLowerCase() || null
+  const expiresHours = Math.max(1, Math.min(168, Number(req.body?.expiresHours || 24)))
+
+  try {
+    const pool = await getPool()
+
+    const token = b64urlEncode(crypto.randomBytes(32))
+    const tokenHash = crypto.createHash('sha256').update(token).digest()
+
+    const { randomUUID } = require('crypto')
+    const invitationId = randomUUID()
+
+    await pool.request()
+      .input('InvitationID', sql.NVarChar(36), invitationId)
+      .input('Email', sql.NVarChar(255), inviteEmail)
+      .input('TokenHash', sql.VarBinary(32), tokenHash)
+      .input('ExpiresAt', sql.DateTime, new Date(Date.now() + expiresHours * 3600 * 1000))
+      .input('CreatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || null))
+      .query('INSERT INTO dbo.AdminInvitations (InvitationID, Email, TokenHash, ExpiresAt, CreatedByUserID) VALUES (@InvitationID, @Email, @TokenHash, @ExpiresAt, @CreatedByUserID)')
+
+    res.json({
+      success: true,
+      token,
+      registerPath: `/register-admin?token=${encodeURIComponent(token)}${inviteEmail ? `&email=${encodeURIComponent(inviteEmail)}` : ''}`
+    })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/auth/register-admin', async (req, res) => {
+  const token = String(req.body?.token || '').trim()
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  const password = String(req.body?.password || '').trim()
+
+  if (!token) return res.status(400).json({ error: 'Invitation token is required' })
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email is required' })
+  if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
+
+  try {
+    const pool = await getPool()
+
+    const tokenHash = crypto.createHash('sha256').update(token).digest()
+    const inv = await pool.request()
+      .input('TokenHash', sql.VarBinary(32), tokenHash)
+      .query('SELECT TOP 1 InvitationID, Email, ExpiresAt, UsedAt FROM dbo.AdminInvitations WHERE TokenHash=@TokenHash ORDER BY CreatedAt DESC')
+
+    if (!inv.recordset?.length) return res.status(400).json({ error: 'Invalid invitation token' })
+    const row = inv.recordset[0]
+    if (row.UsedAt) return res.status(409).json({ error: 'Invitation token already used' })
+    if (row.ExpiresAt && new Date(row.ExpiresAt) < new Date()) return res.status(410).json({ error: 'Invitation token expired' })
+    if (row.Email && String(row.Email).toLowerCase() !== email) return res.status(400).json({ error: 'Invitation token is not for this email' })
+
+    const existing = await pool.request().input('Email', sql.NVarChar(255), email).query('SELECT TOP 1 UserID FROM dbo.AppUsers WHERE LOWER(Email)=@Email')
+    if (existing.recordset?.length) return res.status(409).json({ error: 'Email already registered' })
+
+    const { randomUUID } = require('crypto')
+    const userId = randomUUID()
+
+    await pool.request()
+      .input('UserID', sql.NVarChar(36), userId)
+      .input('Email', sql.NVarChar(255), email)
+      .input('PasswordHash', sql.NVarChar(500), hashPassword(password))
+      .input('Role', sql.NVarChar(30), 'ADMIN')
+      .query('INSERT INTO dbo.AppUsers (UserID, Email, PasswordHash, Role, IsActive) VALUES (@UserID, @Email, @PasswordHash, @Role, 1)')
+
+    await pool.request().input('InvitationID', sql.NVarChar(36), row.InvitationID).query('UPDATE dbo.AdminInvitations SET UsedAt=GETDATE() WHERE InvitationID=@InvitationID')
+
+    const jwt = signToken({ sub: userId, email, role: 'ADMIN' })
+    res.json({ success: true, token: jwt, user: { email, role: 'ADMIN' } })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/auth/forgot-password', async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase()
+  const expiresHours = Math.max(1, Math.min(24, Number(req.body?.expiresHours || 2)))
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email is required' })
+
+  try {
+    const pool = await getPool()
+    const u = await pool.request().input('Email', sql.NVarChar(255), email)
+      .query('SELECT TOP 1 UserID, Email, Role, IsActive FROM dbo.AppUsers WHERE LOWER(Email)=@Email')
+
+    if (!u.recordset?.length) return res.json({ success: true })
+    const row = u.recordset[0]
+    if (!row.IsActive || String(row.Role || '').toUpperCase() !== 'ADMIN') return res.json({ success: true })
+
+    const token = b64urlEncode(crypto.randomBytes(32))
+    const tokenHash = crypto.createHash('sha256').update(token).digest()
+    const { randomUUID } = require('crypto')
+
+    await pool.request()
+      .input('ResetID', sql.NVarChar(36), randomUUID())
+      .input('UserID', sql.NVarChar(36), String(row.UserID))
+      .input('Email', sql.NVarChar(255), email)
+      .input('TokenHash', sql.VarBinary(32), tokenHash)
+      .input('ExpiresAt', sql.DateTime, new Date(Date.now() + expiresHours * 3600 * 1000))
+      .query('INSERT INTO dbo.AdminPasswordResets (ResetID, UserID, Email, TokenHash, ExpiresAt) VALUES (@ResetID, @UserID, @Email, @TokenHash, @ExpiresAt)')
+
+    const resetPath = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`
+    res.json({ success: true, resetPath, token })
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('invalid object name') && (msg.toLowerCase().includes('appusers') || msg.toLowerCase().includes('adminpasswordresets'))) {
+      return res.status(503).json({ error: 'Auth tables are not initialized yet. Restart the backend server to run migrations.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.post('/auth/reset-password', async (req, res) => {
+  const token = String(req.body?.token || '').trim()
+  const password = String(req.body?.password || '').trim()
+  if (!token) return res.status(400).json({ error: 'Reset token is required' })
+  if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
+
+  try {
+    const pool = await getPool()
+    const tokenHash = crypto.createHash('sha256').update(token).digest()
+
+    const r = await pool.request().input('TokenHash', sql.VarBinary(32), tokenHash).query(`
+      SELECT TOP 1 pr.ResetID, pr.UserID, pr.Email, pr.ExpiresAt, pr.UsedAt, u.Role, u.IsActive
+      FROM dbo.AdminPasswordResets pr
+      JOIN dbo.AppUsers u ON u.UserID = pr.UserID
+      WHERE pr.TokenHash=@TokenHash
+      ORDER BY pr.CreatedAt DESC
+    `)
+
+    if (!r.recordset?.length) return res.status(400).json({ error: 'Invalid reset token' })
+    const row = r.recordset[0]
+    if (row.UsedAt) return res.status(409).json({ error: 'Reset token already used' })
+    if (row.ExpiresAt && new Date(row.ExpiresAt) < new Date()) return res.status(410).json({ error: 'Reset token expired' })
+    if (!row.IsActive || String(row.Role || '').toUpperCase() !== 'ADMIN') return res.status(403).json({ error: 'Account disabled' })
+
+    await pool.request()
+      .input('UserID', sql.NVarChar(36), String(row.UserID))
+      .input('PasswordHash', sql.NVarChar(500), hashPassword(password))
+      .query('UPDATE dbo.AppUsers SET PasswordHash=@PasswordHash, LastLoginAt=GETDATE() WHERE UserID=@UserID')
+
+    await pool.request()
+      .input('ResetID', sql.NVarChar(36), String(row.ResetID))
+      .query('UPDATE dbo.AdminPasswordResets SET UsedAt=GETDATE() WHERE ResetID=@ResetID')
+
+    const jwt = signToken({ sub: String(row.UserID), email: String(row.Email), role: 'ADMIN' })
+    res.json({ success: true, token: jwt, user: { email: row.Email, role: 'ADMIN' } })
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('invalid object name') && (msg.toLowerCase().includes('appusers') || msg.toLowerCase().includes('adminpasswordresets'))) {
+      return res.status(503).json({ error: 'Auth tables are not initialized yet. Restart the backend server to run migrations.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+// --------------------------------------------------------------------------
 
 app.get('/employees', async (req, res) => {
   try {
@@ -1828,7 +2286,7 @@ app.post('/attendance/log', async (req, res) => {
     const result = await processAttendanceLog(pool, { employeeID, logType: requestedLogType })
 
     await writeAuditLog(pool, {
-      actor: employeeCode || 'SYSTEM',
+      actor: resolveAuditActor(req, employeeCode || 'SYSTEM'),
       action: 'ATTENDANCE_LOG',
       tableName: 'AttendanceRecords',
       recordID: `${employeeID}:${result.attendanceDate}`,
@@ -1843,7 +2301,7 @@ app.post('/attendance/log', async (req, res) => {
   }
 })
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login-legacy', (req, res) => {
   const { username, password } = req.body || {}
   if (username === 'admin' && password === 'admin') {
     const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
@@ -1921,7 +2379,7 @@ app.post('/face-scan/recognize', async (req, res) => {
     `)
 
     await writeAuditLog(pool, {
-      actor: actor || deviceCode || 'FACE_SCANNER',
+      actor: resolveAuditActor(req, actor || deviceCode || 'FACE_SCANNER'),
       action: 'FACE_SCAN_ATTENDANCE',
       tableName: 'AttendanceRecords',
       recordID: `${employee.EmployeeID}:${attendanceResult.attendanceDate}`,
@@ -2002,7 +2460,7 @@ app.post('/devices', async (req, res) => {
     const created = result.recordset[0]
     if (created && Object.prototype.hasOwnProperty.call(created, 'DevicePassword')) delete created.DevicePassword
     await writeAuditLog(pool, {
-      actor: RegisteredBy || 'SYSTEM',
+      actor: resolveAuditActor(req, RegisteredBy || 'SYSTEM'),
       action: 'CREATE_DEVICE',
       tableName: 'Devices',
       recordID: created.DeviceID,
@@ -2083,7 +2541,7 @@ app.put('/devices/:id', async (req, res) => {
     if (device && Object.prototype.hasOwnProperty.call(device, 'DevicePassword')) delete device.DevicePassword
 
     await writeAuditLog(pool, {
-      actor: body?.Actor || body?.RegisteredBy || 'UI_DEVICES',
+      actor: resolveAuditActor(req, body?.Actor || body?.RegisteredBy || 'UI_DEVICES'),
       action: 'UPDATE_DEVICE',
       tableName: 'Devices',
       recordID: id,
@@ -2168,7 +2626,7 @@ app.post('/devices/register-connection', async (req, res) => {
     const connectionID = randomUUID()
 
     await writeAuditLog(pool, {
-      actor: RegisteredBy || normalizedCode,
+      actor: resolveAuditActor(req, RegisteredBy || normalizedCode),
       action: 'REGISTER_DEVICE_CONNECTION',
       tableName: 'Devices',
       recordID: device?.DeviceID || null,
@@ -2562,7 +3020,7 @@ app.post('/devices/heartbeat', async (req, res) => {
     }
 
     await writeAuditLog(pool, {
-      actor: Actor || normalizedCode || 'DEVICE_CLIENT',
+      actor: resolveAuditActor(req, Actor || normalizedCode || 'DEVICE_CLIENT'),
       action: 'DEVICE_HEARTBEAT',
       tableName: 'Devices',
       recordID: device.DeviceID,
@@ -2604,7 +3062,7 @@ app.post('/devices/heartbeat-batch', async (req, res) => {
 
     try {
       await writeAuditLog(pool, {
-        actor,
+        actor: resolveAuditActor(req, actor),
         action: 'DEVICE_HEARTBEAT_BATCH',
         tableName: 'Devices',
         recordID: null,
@@ -2718,7 +3176,7 @@ app.post('/devices/export-logs', async (req, res) => {
     const filename = `device-${safeCode}-logs-${nowStamp}.csv`
 
     await writeAuditLog(pool, {
-      actor: normalizedCode,
+      actor: resolveAuditActor(req, normalizedCode),
       action: 'EXPORT_DEVICE_LOGS',
       tableName: 'BiometricScans',
       recordID: device.DeviceID,
@@ -3022,7 +3480,7 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
     await transaction.commit()
 
     await writeAuditLog(pool, {
-      actor: normalizedCode,
+      actor: resolveAuditActor(req, normalizedCode),
       action: 'IMPORT_DEVICE_ATTENDANCE_CSV',
       tableName: 'DeviceAttendanceEvents',
       recordID: device.DeviceID,
@@ -3159,7 +3617,7 @@ app.get('/biometric-scans', async (req, res) => {
   }
 })
 
-app.post('/auth/login', (req, res) => {
+app.post('/auth/login-legacy2', (req, res) => {
   const { username, password } = req.body || {}
   if (username === 'admin' && password === 'admin') {
     const token = Buffer.from(`${username}:${Date.now()}`).toString('base64')
@@ -3233,7 +3691,7 @@ app.post('/biometric-scans', async (req, res) => {
     const created = inserted.recordset[0]
 
     await writeAuditLog(pool, {
-      actor: Actor || 'SCANNER',
+      actor: resolveAuditActor(req, Actor || 'SCANNER'),
       action: 'BIOMETRIC_SCAN',
       tableName: 'BiometricScans',
       recordID: created.BiometricScanID,
@@ -3249,7 +3707,7 @@ app.post('/biometric-scans', async (req, res) => {
   }
 })
 
-app.get('/audit-logs', async (req, res) => {
+app.get('/audit-logs', requireAdmin, async (req, res) => {
   try {
     const pool = await getPool()
     const q = `SELECT AuditLogID, Actor, Action, TableName, RecordID, BeforeJson, AfterJson, DeviceID, IPAddress, CreatedAt
@@ -3263,7 +3721,7 @@ app.get('/audit-logs', async (req, res) => {
   }
 })
 
-app.post('/audit-logs', async (req, res) => {
+app.post('/audit-logs', requireAdmin, async (req, res) => {
   const { Actor, Action, TableName, RecordID, BeforeJson, AfterJson, DeviceID, IPAddress } = req.body || {}
   if (!Action || !TableName) {
     return res.status(400).json({ error: 'Action and TableName are required' })
@@ -3273,7 +3731,7 @@ app.post('/audit-logs', async (req, res) => {
     const { randomUUID } = require('crypto')
     const insert = await pool.request()
       .input('AuditLogID', sql.NVarChar(36), randomUUID())
-      .input('Actor', sql.NVarChar(100), Actor || null)
+      .input('Actor', sql.NVarChar(100), resolveAuditActor(req, Actor || null))
       .input('Action', sql.NVarChar(100), Action)
       .input('TableName', sql.NVarChar(128), TableName)
       .input('RecordID', sql.NVarChar(100), RecordID || null)
@@ -3562,7 +4020,18 @@ app.post('/employees', async (req, res) => {
         INSERTED.EmploymentStatus AS position
       VALUES (@EmployeeID, @EmployeeCode, @FirstName, @LastName, @Department, @BiometricStaffCode, @BiometricUserID, @ContactNumber, @Email, @HireDate, @EmploymentStatus)`
     const result = await request.query(insertQ)
-    res.json(result.recordset[0])
+    const created = result.recordset[0]
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, created?.employeeCode || 'UI'),
+      action: 'CREATE_EMPLOYEE',
+      tableName: 'Employees',
+      recordID: created?.id || null,
+      afterJson: JSON.stringify(created),
+      ipAddress: req.ip
+    })
+
+    res.json(created)
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: err.message })
@@ -3580,6 +4049,24 @@ app.put('/employees/:id', async (req, res) => {
     const parts = fullName.split(/\s+/)
     const firstName = parts.shift() || ''
     const lastName = parts.join(' ') || ''
+
+    const beforeRes = await pool.request()
+      .input('EmployeeID', sql.NVarChar(36), id)
+      .query(`
+        SELECT
+          EmployeeID AS id,
+          EmployeeCode AS employeeCode,
+          CONCAT(FirstName,' ',LastName) AS name,
+          Department AS department,
+          BiometricStaffCode AS biometricStaffCode,
+          BiometricUserID AS biometricUserId,
+          ContactNumber AS phone,
+          Email AS email,
+          EmploymentStatus AS position
+        FROM dbo.Employees
+        WHERE EmployeeID=@EmployeeID
+      `)
+    const before = beforeRes.recordset?.[0] || null
 
     request.input('EmployeeID', sql.NVarChar(36), id)
     request.input('FirstName', sql.NVarChar(100), firstName)
@@ -3614,7 +4101,19 @@ app.put('/employees/:id', async (req, res) => {
       WHERE EmployeeID=@EmployeeID`
     const result = await request.query(updateQ)
     if (!result.recordset.length) return res.status(404).json({ error: 'Not found' })
-    res.json(result.recordset[0])
+    const updated = result.recordset[0]
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, updated?.employeeCode || id),
+      action: 'UPDATE_EMPLOYEE',
+      tableName: 'Employees',
+      recordID: id,
+      beforeJson: before ? JSON.stringify(before) : null,
+      afterJson: JSON.stringify(updated),
+      ipAddress: req.ip
+    })
+
+    res.json(updated)
   } catch (err) {
     console.error(err)
     res.status(500).json({ error: err.message })
@@ -3668,6 +4167,15 @@ app.post('/employees/bulk-delete', async (req, res) => {
     }
 
     await transaction.commit()
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, 'UI'),
+      action: 'BULK_DELETE_EMPLOYEES',
+      tableName: 'Employees',
+      afterJson: JSON.stringify({ requested: ids.length, ids, deleted: deletedTotal }),
+      ipAddress: req.ip
+    })
+
     res.json({ success: true, requested: ids.length, deleted: deletedTotal })
   } catch (err) {
     try {
@@ -3697,6 +4205,22 @@ app.delete('/employees/:id', async (req, res) => {
       return res.status(404).json({ error: 'Not found' })
     }
 
+    const beforeRes = await request.query(`
+      SELECT
+        EmployeeID AS id,
+        EmployeeCode AS employeeCode,
+        CONCAT(FirstName,' ',LastName) AS name,
+        Department AS department,
+        BiometricStaffCode AS biometricStaffCode,
+        BiometricUserID AS biometricUserId,
+        ContactNumber AS phone,
+        Email AS email,
+        EmploymentStatus AS position
+      FROM dbo.Employees
+      WHERE EmployeeID=@EmployeeID
+    `)
+    const before = beforeRes.recordset?.[0] || null
+
     await request.query(`
       DELETE FROM dbo.EmployeeShiftAllotments WHERE EmployeeID=@EmployeeID;
       DELETE FROM dbo.AttendanceRecords WHERE EmployeeID=@EmployeeID;
@@ -3708,6 +4232,16 @@ app.delete('/employees/:id', async (req, res) => {
     `)
 
     await transaction.commit()
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, id),
+      action: 'DELETE_EMPLOYEE',
+      tableName: 'Employees',
+      recordID: id,
+      beforeJson: before ? JSON.stringify(before) : null,
+      ipAddress: req.ip
+    })
+
     res.json({ success: true })
   } catch (err) {
     try {
@@ -3729,6 +4263,11 @@ process.on('SIGINT', async () => {
   try { await sql.close() } catch (e) {}
   process.exit(0)
 })
+
+
+
+
+
 
 
 

@@ -1,5 +1,18 @@
 ﻿const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 
+function getAuthToken() {
+  try {
+    return localStorage.getItem('authToken')
+  } catch (_) {
+    return null
+  }
+}
+
+function withAuthHeaders(headers = {}) {
+  const token = getAuthToken()
+  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers
+}
+
 function buildApiError(res, text) {
   let payload = null
   let message = ''
@@ -35,14 +48,16 @@ async function handleRes(res) {
 }
 
 export async function fetchAll(endpoint) {
-  const res = await fetch(`${BASE}/${endpoint}`)
+  const res = await fetch(`${BASE}/${endpoint}`, {
+    headers: withAuthHeaders()
+  })
   return handleRes(res)
 }
 
 export async function createRecord(endpoint, data) {
   const res = await fetch(`${BASE}/${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(data)
   })
   return handleRes(res)
@@ -51,10 +66,66 @@ export async function createRecord(endpoint, data) {
 export async function login(username, password) {
   const res = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password })
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ email: username, username, password })
   })
   return handleRes(res)
+}
+
+export async function fetchBootstrapStatus() {
+  return fetchAll('auth/bootstrap-status')
+}
+
+export async function setupAdmin(email, password) {
+  const res = await fetch(`${BASE}/auth/setup-admin`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ email, password })
+  })
+  return handleRes(res)
+}
+
+export async function registerAdminWithToken(token, email, password) {
+  const res = await fetch(`${BASE}/auth/register-admin`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ token, email, password })
+  })
+  return handleRes(res)
+}
+
+export async function fetchAdminUsers() {
+  return fetchAll('auth/admin-users')
+}
+
+export async function createAdminInvitation(email, expiresHours = 24) {
+  const res = await fetch(`${BASE}/auth/invitations`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ email, expiresHours })
+  })
+  return handleRes(res)
+}
+
+
+export async function forgotPassword(email, expiresHours = 2) {
+  const res = await fetch(`${BASE}/auth/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, expiresHours })
+  })
+  return handleRes(res)
+}
+
+export async function resetPassword(token, password) {
+  const res = await fetch(`${BASE}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, password })
+  })
+  return handleRes(res)
+}export async function fetchMe() {
+  return fetchAll('auth/me')
 }
 
 export async function fetchUsers() {
@@ -117,19 +188,34 @@ export async function fetchAttendanceToday() {
   return fetchAll('attendance/today')
 }
 
+
+
 export async function fetchAttendanceByRange(from, to) {
   const res = await fetch(`${BASE}/attendance/range`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ from, to })
   })
   return handleRes(res)
 }
+export async function fetchAttendanceRawByRange(from, to) {
+  const res = await fetch(`${BASE}/attendance/raw-range`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ from, to })
+  })
 
+  // Backward compatibility: if backend hasn't been restarted yet, fall back.
+  if (res.status === 404) {
+    return fetchAttendanceByRange(from, to)
+  }
+
+  return handleRes(res)
+}
 export async function recordAttendance(employeeCode, logType = 'MORNING_IN') {
   const res = await fetch(`${BASE}/attendance/log`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ employeeCode, logType })
   })
   return handleRes(res)
@@ -146,7 +232,7 @@ export async function faceScanAttendance({
 }) {
   const res = await fetch(`${BASE}/face-scan/recognize`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       employeeCode,
       deviceCode,
@@ -163,7 +249,7 @@ export async function faceScanAttendance({
 async function deleteViaPost(endpoint, id) {
   const res = await fetch(`${BASE}/${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ id })
   })
   return handleRes(res)
@@ -184,13 +270,13 @@ export async function updateAttendanceRecord(id, data) {
   }
   let res = await fetch(`${BASE}/attendance/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload)
   })
   if (res.status === 404 || res.status === 405) {
     res = await fetch(`${BASE}/attendance/update`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ id, ...payload })
     })
   }
@@ -283,7 +369,7 @@ export async function testDeviceConnection({ deviceCode = null, ipAddress = null
 export async function testDevicesBatch({ deviceIds = [] } = {}) {
   const res = await fetch(`${BASE}/devices/test-batch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ deviceIds: Array.isArray(deviceIds) ? deviceIds : [] })
   })
   return handleRes(res)
@@ -292,7 +378,7 @@ export async function testDevicesBatch({ deviceIds = [] } = {}) {
 export async function heartbeatDevicesBatch({ deviceIds = [], actor = null } = {}) {
   const res = await fetch(`${BASE}/devices/heartbeat-batch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ deviceIds: Array.isArray(deviceIds) ? deviceIds : [], actor })
   })
   return handleRes(res)
@@ -306,7 +392,7 @@ function getFilenameFromContentDisposition(value) {
 export async function exportDeviceLogsCsv({ deviceCode, from = null, to = null }) {
   const res = await fetch(`${BASE}/devices/export-logs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       DeviceCode: deviceCode,
       From: from,
@@ -332,7 +418,7 @@ export async function importDeviceAttendanceCsv({
 }) {
   const res = await fetch(`${BASE}/devices/import-attendance-csv`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({
       DeviceCode: deviceCode,
       CsvText: csvText,
@@ -388,7 +474,7 @@ export async function deleteSpecialDay(id) {
 export async function updateRecord(endpoint, id, data) {
   const res = await fetch(`${BASE}/${endpoint}/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(data)
   })
   return handleRes(res)
@@ -396,7 +482,8 @@ export async function updateRecord(endpoint, id, data) {
 
 export async function deleteRecord(endpoint, id) {
   const res = await fetch(`${BASE}/${endpoint}/${id}`, {
-    method: 'DELETE'
+    method: 'DELETE',
+    headers: withAuthHeaders()
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -487,7 +574,7 @@ export async function assignShiftToEmployees({
 export async function fetchEmployeeAssignments({ employeeIDs = [] }) {
   const res = await fetch(`${BASE}/shift-assignments/list`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ employeeIDs })
   })
   return handleRes(res)
@@ -507,6 +594,13 @@ export async function removeShiftAssignments({
   }
   return createRecord('shift-assignments/remove', payload)
 }
+
+
+
+
+
+
+
 
 
 

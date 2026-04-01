@@ -1,4 +1,4 @@
-import React from 'react'
+﻿import React from 'react'
 import {
   Box,
   Container,
@@ -13,7 +13,7 @@ import EmployeeTable from './EmployeeTable'
 import Scheduler from './Scheduler'
 import UsersPage from './UsersPage'
 import AttendanceRecordsPage from './AttendanceRecordsPage'
-import BiometricScansPage from './BiometricScansPage'
+import GenerateReportPage from './GenerateReportPage'
 import DeviceAttendanceEventsPage from './DeviceAttendanceEventsPage'
 import ScheduleDetailsPage from './ScheduleDetailsPage'
 import AuditLogsPage from './AuditLogsPage'
@@ -34,7 +34,7 @@ const PAGE_TO_PATH = {
   attendance: '/attendance',
   'attendance-report': '/attendance-report',
   'device-attendance-events': '/imported-logs',
-  biometric: '/biometric',
+  reports: '/reports',
   'special-days': '/special-days',
   'audit-logs': '/audit-logs'
 }
@@ -52,6 +52,7 @@ const normalizePath = (path) => {
 const getPageFromPath = (pathname) => {
   const normalized = normalizePath(pathname).toLowerCase()
   if (normalized === '/') return 'overview'
+  if (normalized === '/biometric') return 'reports'
   return PATH_TO_PAGE[normalized] || 'overview'
 }
 
@@ -112,8 +113,8 @@ export default function Dashboard({ onLogout }) {
         return <AttendanceReportPage />
       case 'device-attendance-events':
         return <DeviceAttendanceEventsPage />
-      case 'biometric':
-        return <BiometricScansPage />
+      case 'reports':
+        return <GenerateReportPage />
       case 'special-days':
         return <SpecialDaysPage />
       case 'audit-logs':
@@ -210,3 +211,6 @@ export default function Dashboard({ onLogout }) {
     </Box>
   )
 }
+
+
+
