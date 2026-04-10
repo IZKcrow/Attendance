@@ -383,6 +383,37 @@ export async function heartbeatDevicesBatch({ deviceIds = [], actor = null } = {
   })
   return handleRes(res)
 }
+
+export async function requestDeviceSync({ deviceCode }) {
+  const res = await fetch(`${BASE}/devices/request-sync`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ deviceCode })
+  })
+  return handleRes(res)
+}
+
+export async function requestDeviceSyncBatch({ deviceIds = [], deviceCodes = [] } = {}) {
+  const res = await fetch(`${BASE}/devices/request-sync-batch`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      deviceIds: Array.isArray(deviceIds) ? deviceIds : [],
+      deviceCodes: Array.isArray(deviceCodes) ? deviceCodes : []
+    })
+  })
+  return handleRes(res)
+}
+
+export async function fetchDeviceSyncJobs({ top = 100 } = {}) {
+  const params = new URLSearchParams()
+  if (top) params.set('top', String(top))
+  const qs = params.toString()
+  const res = await fetch(`${BASE}/devices/sync-jobs${qs ? `?${qs}` : ''}`, {
+    headers: withAuthHeaders()
+  })
+  return handleRes(res)
+}
 function getFilenameFromContentDisposition(value) {
   if (!value) return null
   const match = String(value).match(/filename\s*=\s*\"?([^\";]+)\"?/i)

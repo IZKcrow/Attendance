@@ -70,18 +70,35 @@ function hhmmToMinutes(v) {
   return hh * 60 + mm
 }
 
+function formatMinutesAsHoursMins(totalMinutes) {
+  const m = Number.isFinite(totalMinutes) ? Math.max(0, Math.round(totalMinutes)) : 0
+  const hrs = Math.floor(m / 60)
+  const mins = m % 60
+  return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ${String(mins).padStart(2, '0')} ${mins === 1 ? 'min' : 'mins'}`
+}
+
 function computeHours(row) {
-  const segments = [
-    [row.MorningTimeIn, row.MorningTimeOut],
-    [row.AfternoonTimeIn, row.AfternoonTimeOut]
-  ]
-  let total = 0
-  for (const [start, end] of segments) {
-    const s = hhmmToMinutes(start)
-    const e = hhmmToMinutes(end)
-    if (s != null && e != null && e > s) total += (e - s)
+  // Company policy: no overtime credit for early IN / late OUT.
+  // Work hours are clamped to the required shift window; late IN / early OUT deduct time.
+  const clampSegment = (actualIn, actualOut, reqIn, reqOut) => {
+    const aIn = hhmmToMinutes(actualIn)
+    const aOut = hhmmToMinutes(actualOut)
+    if (aIn == null || aOut == null || aOut <= aIn) return 0
+
+    const rIn = hhmmToMinutes(reqIn)
+    const rOut = hhmmToMinutes(reqOut)
+    if (rIn == null || rOut == null || rOut <= rIn) return Math.max(0, aOut - aIn)
+
+    const start = Math.max(aIn, rIn) // early IN doesn't add
+    const end = Math.min(aOut, rOut) // late OUT doesn't add
+    return Math.max(0, end - start)
   }
-  return total > 0 ? (total / 60).toFixed(2) : '0.00'
+
+  const total =
+    clampSegment(row.MorningTimeIn, row.MorningTimeOut, row.RequiredMorningIn, row.RequiredMorningOut) +
+    clampSegment(row.AfternoonTimeIn, row.AfternoonTimeOut, row.RequiredAfternoonIn, row.RequiredAfternoonOut)
+
+  return formatMinutesAsHoursMins(total)
 }
 
 function toReportRow(r) {
@@ -97,7 +114,11 @@ function toReportRow(r) {
     MorningTimeIn: amIn,
     MorningTimeOut: amOut,
     AfternoonTimeIn: pmIn,
-    AfternoonTimeOut: pmOut
+    AfternoonTimeOut: pmOut,
+    RequiredMorningIn: fmtTime(r.RequiredMorningIn),
+    RequiredMorningOut: fmtTime(r.RequiredMorningOut),
+    RequiredAfternoonIn: fmtTime(r.RequiredAfternoonIn),
+    RequiredAfternoonOut: fmtTime(r.RequiredAfternoonOut)
   })
 
   return {
@@ -357,7 +378,7 @@ export default function GenerateReportPage() {
           </Typography>
         )}
         <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'var(--muted)' }}>
-          PDF export opens the print dialog (choose “Save as PDF”). If you see a blank tab, allow popups for `localhost`.
+          PDF export opens the print dialog (choose “Save as PDF”).
         </Typography>
       </Paper>
 

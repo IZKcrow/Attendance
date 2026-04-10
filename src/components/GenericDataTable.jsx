@@ -8,7 +8,7 @@ import {
 import EditIcon from '@mui/icons-material/Edit'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
-import { useSnackbar } from './ui/Snackbar'
+import { useSnackbar, APP_ALERT_SX } from './ui/Snackbar'
 
 export default function GenericDataTable({
   title,
@@ -210,7 +210,11 @@ export default function GenericDataTable({
         />
       </Box>
 
-      {(error || localError) && <Alert severity="error">{error || localError}</Alert>}
+      {(error || localError) && (
+        <Alert severity="error" variant="filled" sx={{ ...APP_ALERT_SX, mt: 1, mb: 1 }}>
+          {error || localError}
+        </Alert>
+      )}
 
       <TableContainer
         component={Paper}

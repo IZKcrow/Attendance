@@ -15,6 +15,7 @@ import DevicesOtherIcon from '@mui/icons-material/DevicesOther'
 import InsightsIcon from '@mui/icons-material/Insights'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
+import MenuIcon from '@mui/icons-material/Menu'
 
 const TOP_LEVEL = [
   { id: 'overview', label: 'Dashboard', icon: InsightsIcon },
@@ -83,7 +84,7 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
       onMouseLeave={() => onHover?.(false)}
       >
       <Box sx={{ p: 2, textAlign: 'center', fontWeight: 'bold', fontSize: '18px', color: textColor }}>
-        {expanded ? 'Menu' : 'â˜°'}
+        {expanded ? 'Menu' : <MenuIcon sx={{ color: textColor }} />}
       </Box>
       <Box
         sx={{

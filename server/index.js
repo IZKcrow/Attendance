@@ -6,6 +6,7 @@ const crypto = require('crypto')
 
 const app = express()
 const PORT = process.env.PORT || 4000
+const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'dev-bridge-token'
 
 app.use(cors())
 app.use(bodyParser.json({ limit: '10mb' }))
@@ -585,6 +586,29 @@ BEGIN
   END
 END`,
 
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DeviceSyncJobs' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.DeviceSyncJobs (
+    JobID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    DeviceCode NVARCHAR(100) NOT NULL,
+    RequestedBy NVARCHAR(255) NULL,
+    Status NVARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    Error NVARCHAR(2000) NULL,
+    ResultJson NVARCHAR(MAX) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    StartedAt DATETIME NULL,
+    CompletedAt DATETIME NULL
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_DeviceSyncJobs_StatusCreatedAt' AND object_id = OBJECT_ID('dbo.DeviceSyncJobs'))
+  BEGIN
+    CREATE INDEX IX_DeviceSyncJobs_StatusCreatedAt ON dbo.DeviceSyncJobs(Status, CreatedAt DESC)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_DeviceSyncJobs_DeviceCreatedAt' AND object_id = OBJECT_ID('dbo.DeviceSyncJobs'))
+  BEGIN
+    CREATE INDEX IX_DeviceSyncJobs_DeviceCreatedAt ON dbo.DeviceSyncJobs(DeviceCode, CreatedAt DESC)
+  END
+END`,
+
     `IF OBJECT_ID('dbo.vw_AttendanceStatus','V') IS NOT NULL DROP VIEW dbo.vw_AttendanceStatus;`,
     `CREATE VIEW dbo.vw_AttendanceStatus AS
   SELECT 
@@ -934,6 +958,12 @@ function authOptional(req, _res, next) {
 function requireAdmin(req, res, next) {
   if (!req.authUser) return res.status(401).json({ error: 'Unauthorized' })
   if (String(req.authUser.role || '').toUpperCase() !== 'ADMIN') return res.status(403).json({ error: 'Forbidden' })
+  next()
+}
+
+function requireBridge(req, res, next) {
+  const token = String(req.headers['x-bridge-token'] || '').trim()
+  if (!token || token !== BRIDGE_TOKEN) return res.status(401).json({ error: 'Unauthorized' })
   next()
 }
 
@@ -2039,21 +2069,41 @@ async function processAttendanceLog(pool, { employeeID, logType, now = new Date(
   let minutesEarly = 0
   let status = 'On-Time'
 
-  if (logType === 'MORNING_IN') {
+  const calcLate = async (requiredTime) => {
+    if (!requiredTime) return 0
     const diff = await pool.request()
       .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
-      .input('Required', sql.NVarChar(8), toTimeLiteral(shift.MorningTimeIn))
+      .input('Required', sql.NVarChar(8), toTimeLiteral(requiredTime))
       .query(`SELECT DATEDIFF(MINUTE, CAST(@Required AS TIME(7)), CAST(@Actual AS TIME(7))) AS diff`)
-    minutesLate = Math.max(0, diff.recordset[0].diff - (shift.GracePeriodMinutes || 0))
+    return Math.max(0, diff.recordset[0].diff - (shift.GracePeriodMinutes || 0))
+  }
+
+  const calcEarlyLeave = async (requiredTime) => {
+    if (!requiredTime) return 0
+    const diff = await pool.request()
+      .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
+      .input('Required', sql.NVarChar(8), toTimeLiteral(requiredTime))
+      .query(`SELECT DATEDIFF(MINUTE, CAST(@Actual AS TIME(7)), CAST(@Required AS TIME(7))) AS diff`)
+    return Math.max(0, diff.recordset[0].diff)
+  }
+
+  if (logType === 'MORNING_IN') {
+    minutesLate = await calcLate(shift.MorningTimeIn)
     if (minutesLate > 0) status = 'Late'
   }
 
+  if (logType === 'AFTERNOON_IN') {
+    minutesLate = await calcLate(shift.AfternoonTimeIn)
+    if (minutesLate > 0) status = 'Late'
+  }
+
+  if (logType === 'MORNING_OUT') {
+    minutesEarly = await calcEarlyLeave(shift.MorningTimeOut)
+    if (minutesEarly > 0) status = 'Early Leave'
+  }
+
   if (logType === 'AFTERNOON_OUT') {
-    const diff = await pool.request()
-      .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
-      .input('Required', sql.NVarChar(8), toTimeLiteral(shift.AfternoonTimeOut))
-      .query(`SELECT DATEDIFF(MINUTE, CAST(@Actual AS TIME(7)), CAST(@Required AS TIME(7))) AS diff`)
-    minutesEarly = Math.max(0, diff.recordset[0].diff)
+    minutesEarly = await calcEarlyLeave(shift.AfternoonTimeOut)
     if (minutesEarly > 0) status = 'Early Leave'
   }
 
@@ -3810,6 +3860,16 @@ app.get('/attendance/today', async (req, res) => {
       CASE
         WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
         WHEN
+          (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+          OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
+          OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
+          OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL)
+        THEN 'Incomplete'
+        WHEN
+          (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+          OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL)
+        THEN 'Half-Day'
+        WHEN
           (CASE
             WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
             WHEN a.MorningTimeIn IS NULL THEN 'Absent'
@@ -3946,11 +4006,23 @@ app.post('/attendance/range', async (req, res) => {
             sp.GracePeriodMinutes,
             CASE
               WHEN a.AttendanceID IS NULL THEN 'Absent'
-              WHEN (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL) THEN 'Incomplete'
+              WHEN
+                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+                OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
+              WHEN
+                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
               WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
               WHEN a.AfternoonTimeIn IS NOT NULL
                    AND a.AfternoonTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqAfternoonIn) THEN 'Late'
+              WHEN a.MorningTimeOut IS NOT NULL
+                   AND sp.ReqMorningOut IS NOT NULL
+                   AND a.MorningTimeOut < sp.ReqMorningOut THEN 'Early Leave'
+              WHEN a.AfternoonTimeOut IS NOT NULL
+                   AND sp.ReqAfternoonOut IS NOT NULL
+                   AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
               ELSE 'On-Time'
             END AS AttendanceSummary
         FROM ShiftPick sp
@@ -3967,6 +4039,290 @@ app.post('/attendance/range', async (req, res) => {
     res.json(result.recordset)
   } catch (err) {
     console.error(`[perf] /attendance/range failed from=${from} to=${to} after ${Date.now() - t0}ms`, err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Queue device sync jobs (Option A bridge: React -> backend -> C# bridge -> backend import).
+app.post('/devices/request-sync', requireAdmin, async (req, res) => {
+  const deviceCode = String(req.body?.deviceCode || req.body?.DeviceCode || '').trim()
+  if (!deviceCode) return res.status(400).json({ error: 'deviceCode is required' })
+
+  try {
+    const pool = await getPool()
+    const exists = await pool.request()
+      .input('DeviceCode', sql.NVarChar(100), deviceCode)
+      .query('SELECT TOP 1 DeviceID, DeviceCode FROM dbo.Devices WHERE DeviceCode=@DeviceCode')
+
+    if (!exists.recordset?.length) return res.status(404).json({ error: 'Device not found' })
+
+    const inserted = await pool.request()
+      .input('DeviceCode', sql.NVarChar(100), deviceCode)
+      .input('RequestedBy', sql.NVarChar(255), resolveAuditActor(req, null))
+      .query(`
+        INSERT INTO dbo.DeviceSyncJobs (DeviceCode, RequestedBy, Status)
+        OUTPUT INSERTED.JobID, INSERTED.DeviceCode, INSERTED.Status, INSERTED.CreatedAt
+        VALUES (@DeviceCode, @RequestedBy, 'PENDING')
+      `)
+
+    const job = inserted.recordset?.[0] || null
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, deviceCode),
+      action: 'REQUEST_DEVICE_SYNC',
+      tableName: 'DeviceSyncJobs',
+      recordID: job?.JobID || null,
+      afterJson: JSON.stringify(job),
+      ipAddress: req.ip
+    })
+
+    res.json({ success: true, job })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/devices/request-sync-batch', requireAdmin, async (req, res) => {
+  const idsRaw = req.body?.deviceIds || req.body?.DeviceIDs
+  const codesRaw = req.body?.deviceCodes || req.body?.DeviceCodes
+  const deviceIds = Array.isArray(idsRaw) ? Array.from(new Set(idsRaw.map(v => String(v || '').trim()).filter(Boolean))) : []
+  const deviceCodes = Array.isArray(codesRaw) ? Array.from(new Set(codesRaw.map(v => String(v || '').trim()).filter(Boolean))) : []
+
+  if (!deviceIds.length && !deviceCodes.length) {
+    return res.status(400).json({ error: 'Provide deviceIds[] or deviceCodes[]' })
+  }
+
+  try {
+    const pool = await getPool()
+
+    let devices = []
+    if (deviceIds.length) {
+      const request = pool.request()
+      deviceIds.forEach((id, idx) => request.input(`id${idx}`, sql.NVarChar(36), id))
+      const values = deviceIds.map((_, idx) => `@id${idx}`).join(',')
+      const result = await request.query(`SELECT DeviceID, DeviceCode FROM dbo.Devices WHERE DeviceID IN (${values})`)
+      devices = result.recordset || []
+    } else {
+      const request = pool.request()
+      deviceCodes.forEach((c, idx) => request.input(`c${idx}`, sql.NVarChar(100), c))
+      const values = deviceCodes.map((_, idx) => `@c${idx}`).join(',')
+      const result = await request.query(`SELECT DeviceID, DeviceCode FROM dbo.Devices WHERE DeviceCode IN (${values})`)
+      devices = result.recordset || []
+    }
+
+    if (!devices.length) return res.status(404).json({ error: 'No matching devices found' })
+
+    const requestedBy = resolveAuditActor(req, null)
+    const jobs = []
+    for (const d of devices) {
+      const inserted = await pool.request()
+        .input('DeviceCode', sql.NVarChar(100), d.DeviceCode)
+        .input('RequestedBy', sql.NVarChar(255), requestedBy)
+        .query(`
+          INSERT INTO dbo.DeviceSyncJobs (DeviceCode, RequestedBy, Status)
+          OUTPUT INSERTED.JobID, INSERTED.DeviceCode, INSERTED.Status, INSERTED.CreatedAt
+          VALUES (@DeviceCode, @RequestedBy, 'PENDING')
+        `)
+      if (inserted.recordset?.[0]) jobs.push(inserted.recordset[0])
+    }
+
+    await writeAuditLog(pool, {
+      actor: requestedBy,
+      action: 'REQUEST_DEVICE_SYNC_BATCH',
+      tableName: 'DeviceSyncJobs',
+      afterJson: JSON.stringify({ requested: devices.length, jobs }),
+      ipAddress: req.ip
+    })
+
+    res.json({ success: true, requested: devices.length, queued: jobs.length, jobs })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.get('/devices/sync-jobs', requireAdmin, async (req, res) => {
+  const topRaw = Number.parseInt(String(req.query?.top || '100'), 10)
+  const top = Number.isInteger(topRaw) && topRaw > 0 ? Math.min(topRaw, 500) : 100
+
+  try {
+    const pool = await getPool()
+    const r = await pool.request().query(`
+      SELECT TOP (${top})
+        JobID, DeviceCode, RequestedBy, Status, Error, ResultJson, CreatedAt, StartedAt, CompletedAt
+      FROM dbo.DeviceSyncJobs
+      ORDER BY CreatedAt DESC
+    `)
+    res.json(r.recordset || [])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Bridge agent polling endpoint
+app.get('/bridge/next', requireBridge, async (_req, res) => {
+  try {
+    const pool = await getPool()
+    const r = await pool.request().query(`
+      ;WITH NextJob AS (
+        SELECT TOP 1 JobID
+        FROM dbo.DeviceSyncJobs WITH (UPDLOCK, READPAST, ROWLOCK)
+        WHERE Status='PENDING'
+        ORDER BY CreatedAt ASC
+      )
+      UPDATE j
+      SET Status='RUNNING', StartedAt=ISNULL(StartedAt, GETDATE())
+      OUTPUT
+        inserted.JobID,
+        inserted.DeviceCode,
+        d.IPAddress,
+        d.Port,
+        d.MachineID,
+        d.CommPort,
+        d.DevicePassword
+      FROM dbo.DeviceSyncJobs j
+      JOIN NextJob nj ON nj.JobID = j.JobID
+      LEFT JOIN dbo.Devices d ON d.DeviceCode = j.DeviceCode;
+    `)
+
+    if (!r.recordset?.length) return res.json({ job: null })
+    return res.json({ job: r.recordset[0] })
+  } catch (err) {
+    return res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/bridge/jobs/:id/complete', requireBridge, async (req, res) => {
+  const id = String(req.params.id || '').trim()
+  const success = req.body?.success === true
+  const error = String(req.body?.error || '').trim() || null
+  const result = req.body?.result ?? null
+
+  if (!id) return res.status(400).json({ error: 'Job ID is required' })
+
+  try {
+    const pool = await getPool()
+    const beforeRes = await pool.request()
+      .input('JobID', sql.NVarChar(36), id)
+      .query('SELECT TOP 1 * FROM dbo.DeviceSyncJobs WHERE JobID=@JobID')
+    const before = beforeRes.recordset?.[0] || null
+
+    const upd = await pool.request()
+      .input('JobID', sql.NVarChar(36), id)
+      .input('Status', sql.NVarChar(20), success ? 'SUCCEEDED' : 'FAILED')
+      .input('Error', sql.NVarChar(2000), error)
+      .input('ResultJson', sql.NVarChar(sql.MAX), result ? JSON.stringify(result) : null)
+      .query(`
+        UPDATE dbo.DeviceSyncJobs
+        SET
+          Status=@Status,
+          Error=@Error,
+          ResultJson=@ResultJson,
+          CompletedAt=GETDATE()
+        OUTPUT INSERTED.JobID, INSERTED.DeviceCode, INSERTED.Status, INSERTED.Error, INSERTED.ResultJson, INSERTED.CreatedAt, INSERTED.StartedAt, INSERTED.CompletedAt
+        WHERE JobID=@JobID
+      `)
+
+    const after = upd.recordset?.[0] || null
+    if (!after) return res.status(404).json({ error: 'Job not found' })
+
+    await writeAuditLog(pool, {
+      actor: before?.RequestedBy || 'BRIDGE',
+      action: 'COMPLETE_DEVICE_SYNC',
+      tableName: 'DeviceSyncJobs',
+      recordID: id,
+      beforeJson: before ? JSON.stringify(before) : null,
+      afterJson: JSON.stringify(after),
+      ipAddress: req.ip
+    })
+
+    res.json({ success: true, job: after })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Raw attendance records for a date range (does NOT require shift assignments).
+// Use this when you want to see actual stored IN/OUT times even if an employee has no schedule.
+app.post('/attendance/raw-range', async (req, res) => {
+  const t0 = Date.now()
+  const { from, to } = req.body || {}
+  if (!from || !to) {
+    return res.status(400).json({ error: 'from and to are required (YYYY-MM-DD)' })
+  }
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/
+  if (!dateRegex.test(from) || !dateRegex.test(to)) {
+    return res.status(400).json({ error: 'from and to must be YYYY-MM-DD' })
+  }
+
+  try {
+    const pool = await getPool()
+    const result = await pool.request()
+      .input('from', sql.Date, from)
+      .input('to', sql.Date, to)
+      .query(`
+        SET DATEFIRST 1;
+
+        SELECT
+          a.AttendanceID,
+          a.EmployeeID,
+          e.EmployeeCode,
+          CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
+          CONVERT(varchar(10), a.AttendanceDate, 23) AS AttendanceDate,
+          CONVERT(varchar(5), a.MorningTimeIn, 108)    AS MorningTimeIn,
+          CONVERT(varchar(5), a.MorningTimeOut, 108)   AS MorningTimeOut,
+          CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
+          CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+          sched.ShiftName,
+          ISNULL(sched.GracePeriodMinutes, 0) AS GracePeriodMinutes,
+          CONVERT(varchar(5), sched.ReqMorningIn, 108)     AS RequiredMorningIn,
+          CONVERT(varchar(5), sched.ReqMorningOut, 108)    AS RequiredMorningOut,
+          CONVERT(varchar(5), sched.ReqAfternoonIn, 108)   AS RequiredAfternoonIn,
+          CONVERT(varchar(5), sched.ReqAfternoonOut, 108)  AS RequiredAfternoonOut,
+          CASE
+            WHEN
+              (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+              OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
+              OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
+              OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
+            WHEN
+              (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+              OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
+            WHEN sched.ReqMorningIn IS NOT NULL AND a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
+            WHEN sched.ReqAfternoonIn IS NOT NULL AND a.AfternoonTimeIn IS NOT NULL
+                 AND a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+            ELSE 'On-Time'
+          END AS AttendanceSummary
+        FROM dbo.AttendanceRecords a
+        JOIN dbo.Employees e ON e.EmployeeID = a.EmployeeID
+        OUTER APPLY (
+          SELECT TOP 1
+            s.ShiftName,
+            ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
+            ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
+            ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
+            ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
+            ISNULL(dss.GracePeriodMinutes, s.GracePeriodMinutes) AS GracePeriodMinutes
+          FROM dbo.EmployeeShiftAllotments sa
+          JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID
+          LEFT JOIN dbo.ShiftDays sd
+            ON sd.ShiftID = s.ShiftID
+           AND sd.DayOfWeek = CASE WHEN DATEPART(WEEKDAY, a.AttendanceDate) = 1 THEN 7 ELSE DATEPART(WEEKDAY, a.AttendanceDate) - 1 END
+          LEFT JOIN dbo.ShiftDaySchedules dss
+            ON dss.ShiftID = s.ShiftID
+           AND dss.DayOfWeek = ISNULL(sd.DayOfWeek, CASE WHEN DATEPART(WEEKDAY, a.AttendanceDate) = 1 THEN 7 ELSE DATEPART(WEEKDAY, a.AttendanceDate) - 1 END)
+          WHERE sa.EmployeeID = a.EmployeeID
+            AND a.AttendanceDate BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, a.AttendanceDate)
+          ORDER BY sa.EffectiveFrom DESC
+        ) sched
+        WHERE a.AttendanceDate BETWEEN @from AND @to
+          AND a.AttendanceDate <= CAST(GETDATE() AS DATE)
+        ORDER BY a.AttendanceDate DESC, a.MorningTimeIn DESC;
+      `)
+
+    console.log(`[perf] /attendance/raw-range from=${from} to=${to} rows=${result.recordset?.length || 0} ms=${Date.now() - t0}`)
+    res.json(result.recordset || [])
+  } catch (err) {
+    console.error(`[perf] /attendance/raw-range failed from=${from} to=${to} after ${Date.now() - t0}ms`, err)
     res.status(500).json({ error: err.message })
   }
 })

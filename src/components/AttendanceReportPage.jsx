@@ -52,20 +52,35 @@ function toMinutes(hhmm) {
   return h * 60 + m
 }
 
+function formatMinutesAsHoursMins(totalMinutes) {
+  const m = Number.isFinite(totalMinutes) ? Math.max(0, Math.round(totalMinutes)) : 0
+  const hrs = Math.floor(m / 60)
+  const mins = m % 60
+  return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ${String(mins).padStart(2, '0')} ${mins === 1 ? 'min' : 'mins'}`
+}
+
 function computeDutyHours(row) {
-  const segments = [
-    [row.MorningTimeIn, row.MorningTimeOut],
-    [row.AfternoonTimeIn, row.AfternoonTimeOut]
-  ]
-  let total = 0
-  segments.forEach(([start, end]) => {
-    const s = toMinutes(start)
-    const e = toMinutes(end)
-    if (s != null && e != null && e > s) {
-      total += e - s
-    }
-  })
-  return total > 0 ? (total / 60).toFixed(2) : '0.00'
+  // Company policy: no overtime credit for early IN / late OUT.
+  // Work hours are clamped to the required shift window; late IN / early OUT deduct time.
+  const clampSegment = (actualIn, actualOut, reqIn, reqOut) => {
+    const aIn = toMinutes(actualIn)
+    const aOut = toMinutes(actualOut)
+    if (aIn == null || aOut == null || aOut <= aIn) return 0
+
+    const rIn = toMinutes(reqIn)
+    const rOut = toMinutes(reqOut)
+    if (rIn == null || rOut == null || rOut <= rIn) return Math.max(0, aOut - aIn)
+
+    const start = Math.max(aIn, rIn)
+    const end = Math.min(aOut, rOut)
+    return Math.max(0, end - start)
+  }
+
+  const total =
+    clampSegment(row.MorningTimeIn, row.MorningTimeOut, row.RequiredMorningIn, row.RequiredMorningOut) +
+    clampSegment(row.AfternoonTimeIn, row.AfternoonTimeOut, row.RequiredAfternoonIn, row.RequiredAfternoonOut)
+
+  return formatMinutesAsHoursMins(total)
 }
 
 function getRangeDate(kind, anchorDateStr = null) {
@@ -115,6 +130,7 @@ export default function AttendanceReportPage() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
   const [range, setRange] = React.useState('today')
+  const [dataSource, setDataSource] = React.useState('SHIFT') // SHIFT (shows absents) vs RAW (stored IN/OUT only)
   const [from, setFrom] = React.useState(toDateInputValue(new Date()))
   const [to, setTo] = React.useState(toDateInputValue(new Date()))
   const [weekAnchor, setWeekAnchor] = React.useState(toDateInputValue(new Date()))
@@ -126,7 +142,7 @@ export default function AttendanceReportPage() {
 
   React.useEffect(() => {
     loadRecords()
-  }, [range, from, to, weekAnchor, monthAnchor, yearAnchor])
+  }, [range, dataSource, from, to, weekAnchor, monthAnchor, yearAnchor])
 
   const loadRecords = async () => {
     try {
@@ -134,28 +150,43 @@ export default function AttendanceReportPage() {
       let data = []
       switch (range) {
         case 'today':
-          data = await api.fetchAttendanceToday()
+          if (dataSource === 'RAW') {
+            const today = toDateInputValue(new Date())
+            data = await api.fetchAttendanceRawByRange(today, today)
+          } else {
+            data = await api.fetchAttendanceToday()
+          }
           break
         case 'week': {
           const r = getRangeDate('week', weekAnchor)
-          data = await api.fetchAttendanceByRange(r.from, r.to)
+          data = dataSource === 'RAW'
+            ? await api.fetchAttendanceRawByRange(r.from, r.to)
+            : await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'month': {
           const r = getRangeDate('month', monthAnchor)
-          data = await api.fetchAttendanceByRange(r.from, r.to)
+          data = dataSource === 'RAW'
+            ? await api.fetchAttendanceRawByRange(r.from, r.to)
+            : await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'year': {
           const r = getRangeDate('year', `${yearAnchor}-01-01`)
-          data = await api.fetchAttendanceByRange(r.from, r.to)
+          data = dataSource === 'RAW'
+            ? await api.fetchAttendanceRawByRange(r.from, r.to)
+            : await api.fetchAttendanceByRange(r.from, r.to)
           break
         }
         case 'custom':
-          data = await api.fetchAttendanceByRange(from, to)
+          data = dataSource === 'RAW'
+            ? await api.fetchAttendanceRawByRange(from, to)
+            : await api.fetchAttendanceByRange(from, to)
           break
         default:
-          data = await api.fetchAttendanceToday()
+          data = dataSource === 'RAW'
+            ? await api.fetchAttendanceRawByRange(from, to)
+            : await api.fetchAttendanceToday()
       }
       const arr = Array.isArray(data) ? data : []
       const normalized = arr.map((rec) => {
@@ -247,8 +278,9 @@ export default function AttendanceReportPage() {
     const early = normalized.filter(s => s.includes('early leave') || s.includes('early-out')).length
     const absent = normalized.filter(s => s.includes('absent')).length
     const incomplete = normalized.filter(s => s.includes('incomplete')).length
+    const halfDay = normalized.filter(s => s.includes('half')).length
     const onTime = normalized.filter(s => s.includes('on-time') || s === 'on time' || s === 'present').length
-    return { total, late, onTime, early, absent, incomplete }
+    return { total, late, onTime, early, absent, incomplete, halfDay }
   }, [records])
 
   const filtered = records.filter((r) => {
@@ -259,6 +291,7 @@ export default function AttendanceReportPage() {
     if (statusFilter === 'early') return s.includes('early')
     if (statusFilter === 'absent') return s.includes('absent')
     if (statusFilter === 'incomplete') return s.includes('incomplete')
+    if (statusFilter === 'half-day') return s.includes('half')
     return true
   })
 
@@ -277,6 +310,20 @@ export default function AttendanceReportPage() {
           <option value="year">Year</option>
           <option value="custom">Custom</option>
         </select>
+
+        <label style={{ fontWeight: 700 }}>Source:</label>
+        <select
+          value={dataSource}
+          onChange={(e) => setDataSource(e.target.value)}
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)' }}
+          title={dataSource === 'RAW'
+            ? 'RAW: Shows stored IN/OUT times even if no shift is assigned (does not generate absents).'
+            : 'SHIFT: Uses assigned shifts to show absents and schedule-required times.'}
+        >
+          <option value="SHIFT">Shift-based</option>
+          <option value="RAW">Raw records</option>
+        </select>
+
         {range === 'week' && (
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <span>Any date in week:</span>
@@ -337,6 +384,7 @@ export default function AttendanceReportPage() {
             <option value="early">Early Leave</option>
             <option value="absent">Absent</option>
             <option value="incomplete">Incomplete</option>
+            <option value="half-day">Half-Day</option>
           </select>
         </div>
       </div>
@@ -348,6 +396,7 @@ export default function AttendanceReportPage() {
         <StatCard label="Early leave" value={totals.early} tone="muted" />
         <StatCard label="Absent" value={totals.absent} tone="muted" />
         <StatCard label="Incomplete" value={totals.incomplete} tone="neutral" />
+        <StatCard label="Half-Day" value={totals.halfDay} tone="neutral" />
       </div>
 
       <Paper sx={editCardSx}>
@@ -534,6 +583,7 @@ function renderStatusBadge(statusRaw) {
     'early-out': { bg: '#4f46e5', fg: '#ffffff' },
     absent: { bg: '#dc2626', fg: '#ffffff' },
     incomplete: { bg: '#6b7280', fg: '#ffffff' },
+    'half-day': { bg: '#0ea5e9', fg: '#ffffff' },
     missing: { bg: '#6b7280', fg: '#ffffff' }
   }
   const key = Object.keys(palette).find(k => s.includes(k))

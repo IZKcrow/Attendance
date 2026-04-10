@@ -134,6 +134,11 @@ function enrichToday(records, opts = {}) {
     const hasAfternoonIn = !!r.AfternoonTimeIn
     const hasAfternoonOut = !!r.AfternoonTimeOut
 
+    const halfDay =
+      status.includes('half') ||
+      ((hasMorningIn && hasMorningOut && !hasAfternoonIn && !hasAfternoonOut) ||
+        (!hasMorningIn && !hasMorningOut && hasAfternoonIn && hasAfternoonOut))
+
     const recordDate = toDateStr(
       r.AttendanceDate || r.AttendanceDay || r.CreatedAt || r.date || r.attendance_date || r.Date || now
     )
@@ -152,10 +157,11 @@ function enrichToday(records, opts = {}) {
       if (hasMorningReq && requireMorningOut && (!hasMorningIn || !hasMorningOut)) incomplete = true
       if (hasAfternoonReq && requireAfternoonOut && (!hasAfternoonIn || !hasAfternoonOut)) incomplete = true
     }
+    if (halfDay) incomplete = true
 
     const onTime = !absent && hasMorningIn && !late && !earlyLeave && !incomplete
 
-    return { ...r, flags: { onTime, late, absent, earlyLeave, incomplete } }
+    return { ...r, flags: { onTime, late, absent, earlyLeave, incomplete, halfDay } }
   })
 }
 
@@ -880,7 +886,7 @@ function getRecentRowSx(rawStatus) {
   if (s.includes('absent')) return { backgroundColor: 'rgba(185,28,28,0.08)' }
   if (s.includes('late')) return { backgroundColor: 'rgba(180,83,9,0.08)' }
   if (s.includes('on time')) return { backgroundColor: 'rgba(0,144,99,0.06)' }
-  if (s.includes('incomplete')) return { backgroundColor: 'rgba(107,114,128,0.08)' }
+  if (s.includes('incomplete') || s.includes('half')) return { backgroundColor: 'rgba(107,114,128,0.08)' }
   return {}
 }
 
@@ -892,7 +898,7 @@ function renderStatusChip(raw, palette) {
       ? { bg: 'rgba(185,28,28,0.14)', fg: '#991b1b' }
       : s.includes('early')
         ? { bg: 'rgba(0,144,99,0.12)', fg: palette.primaryDark || '#006b4b' }
-        : s.includes('incomplete')
+        : (s.includes('incomplete') || s.includes('half'))
           ? { bg: 'rgba(148,163,184,0.18)', fg: palette.muted || '#6b7280' }
           : { bg: 'rgba(0,144,99,0.18)', fg: palette.primary || '#009063' }
   return (

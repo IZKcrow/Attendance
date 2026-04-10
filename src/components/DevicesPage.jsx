@@ -12,6 +12,7 @@ export default function DevicesPage() {
   const [statusMsg, setStatusMsg] = React.useState('')
   const [lastRefreshedAt, setLastRefreshedAt] = React.useState(null)
   const [selectedDeviceIds, setSelectedDeviceIds] = React.useState([])
+  const [syncJobs, setSyncJobs] = React.useState([])
   const importFileInputRef = React.useRef(null)
   const importTargetRef = React.useRef(null)
 
@@ -38,9 +39,11 @@ export default function DevicesPage() {
   React.useEffect(() => {
     let alive = true
     loadDevices({ silent: false, aliveRef: () => alive })
+    loadSyncJobs({ silent: true, aliveRef: () => alive })
 
     const intervalId = setInterval(() => {
       loadDevices({ silent: true, aliveRef: () => alive })
+      loadSyncJobs({ silent: true, aliveRef: () => alive })
     }, 15000)
 
     return () => {
@@ -65,6 +68,17 @@ export default function DevicesPage() {
       if (!aliveRef || aliveRef()) setError(err.message)
     } finally {
       if (!silent && (!aliveRef || aliveRef())) setLoading(false)
+    }
+  }
+
+  const loadSyncJobs = async ({ silent = false, aliveRef = null } = {}) => {
+    try {
+      const data = await api.fetchDeviceSyncJobs({ top: 25 })
+      if (!aliveRef || aliveRef()) {
+        setSyncJobs(Array.isArray(data) ? data : [])
+      }
+    } catch (_) {
+      if (!silent && (!aliveRef || aliveRef())) setSyncJobs([])
     }
   }
 
@@ -130,89 +144,6 @@ export default function DevicesPage() {
     }
   }
 
-  const registerConnection = async (device) => {
-    if (!device?.DeviceCode) return
-    setBusyId(device.DeviceID || device.DeviceCode)
-    try {
-      await api.registerDeviceConnection({
-        deviceCode: device.DeviceCode,
-        deviceName: device.DeviceName,
-        deviceType: device.DeviceType || 'TCP',
-        serialNumber: device.SerialNumber,
-        ipAddress: device.IPAddress,
-        port: device.Port,
-        registeredBy: 'UI_DEVICES'
-      })
-      setStatusMsg(`Registered ${device.DeviceCode} @ ${new Date().toLocaleTimeString()}`)
-      loadDevices({ silent: true })
-    } catch (err) {
-      setStatusMsg(`Register failed: ${err.message || err}`)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const sendHeartbeat = async (device) => {
-    if (!device?.DeviceCode) return
-    setBusyId(device.DeviceID || device.DeviceCode)
-    try {
-      await api.sendDeviceHeartbeat({ deviceCode: device.DeviceCode, deviceID: device.DeviceID, actor: 'UI_DEVICES' })
-      setStatusMsg(`Heartbeat sent for ${device.DeviceCode} @ ${new Date().toLocaleTimeString()}`)
-      loadDevices({ silent: true })
-    } catch (err) {
-      setStatusMsg(`Heartbeat failed: ${err.message || err}`)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const testConnection = async (device) => {
-    if (!device?.DeviceCode) return
-    setBusyId(device.DeviceID || device.DeviceCode)
-    try {
-      const result = await api.testDeviceConnection({ deviceCode: device.DeviceCode })
-      if (result?.success) {
-        setStatusMsg(`Connection OK for ${device.DeviceCode} (${result.ip}:${result.port}) - ${result.latencyMs}ms`)
-      } else {
-        setStatusMsg(`Connection FAIL for ${device.DeviceCode} (${result?.ip || '-'}:${result?.port || '-'}) - ${result?.reason || 'error'}`)
-      }
-    } catch (err) {
-      setStatusMsg(`Test failed: ${err.message || err}`)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const exportLogs = async (device) => {
-    if (!device?.DeviceCode) return
-    setBusyId(device.DeviceID || device.DeviceCode)
-    try {
-      const { blob, filename } = await api.exportDeviceLogsCsv({ deviceCode: device.DeviceCode })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename || `device-${device.DeviceCode}-logs.csv`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
-      setStatusMsg(`Exported logs for ${device.DeviceCode} @ ${new Date().toLocaleTimeString()}`)
-    } catch (err) {
-      setStatusMsg(`Export failed: ${err.message || err}`)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const startImportCsv = (device) => {
-    if (!device?.DeviceCode) return
-    importTargetRef.current = device
-    if (importFileInputRef.current) {
-      importFileInputRef.current.value = ''
-      importFileInputRef.current.click()
-    }
-  }
-
   const onImportFileChange = async (e) => {
     const device = importTargetRef.current
     const file = e?.target?.files?.[0] || null
@@ -262,134 +193,21 @@ export default function DevicesPage() {
     })
   }, [])
 
-  const handleTestSelected = async () => {
+  const handleSyncSelected = async () => {
     if (!selectedDeviceIds.length) {
       setStatusMsg('Select at least one device.')
       return
     }
 
-    setBusyId('BATCH_TEST')
+    setBusyId('BATCH_SYNC')
     try {
-      try {
-        const result = await api.testDevicesBatch({ deviceIds: selectedDeviceIds })
-        const results = Array.isArray(result?.results) ? result.results : []
-        const ok = results.filter(r => r.success).length
-        setStatusMsg(`Batch test complete: ${ok}/${results.length || selectedDeviceIds.length} OK`)
-      } catch (_) {
-        const byId = new Map(devices.map(d => [d.DeviceID, d]))
-        let ok = 0
-        let total = 0
-        for (const id of selectedDeviceIds) {
-          const dev = byId.get(id)
-          if (!dev?.DeviceCode) continue
-          total += 1
-          try {
-            const r = await api.testDeviceConnection({ deviceCode: dev.DeviceCode })
-            if (r?.success) ok += 1
-          } catch (_) {}
-        }
-        setStatusMsg(`Batch test complete: ${ok}/${total} OK`)
-      }
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const handleHeartbeatSelected = async () => {
-    if (!selectedDeviceIds.length) {
-      setStatusMsg('Select at least one device.')
-      return
-    }
-
-    setBusyId('BATCH_HEARTBEAT')
-    try {
-      try {
-        const result = await api.heartbeatDevicesBatch({ deviceIds: selectedDeviceIds, actor: 'UI_DEVICES' })
-        setStatusMsg(`Heartbeat updated for ${result?.updated ?? selectedDeviceIds.length} device(s).`)
-        loadDevices({ silent: true })
-      } catch (_) {
-        const byId = new Map(devices.map(d => [d.DeviceID, d]))
-        let updated = 0
-        for (const id of selectedDeviceIds) {
-          const dev = byId.get(id)
-          if (!dev?.DeviceCode) continue
-          try {
-            await api.sendDeviceHeartbeat({ deviceCode: dev.DeviceCode, deviceID: dev.DeviceID, actor: 'UI_DEVICES' })
-            updated += 1
-          } catch (_) {}
-        }
-        setStatusMsg(`Heartbeat sent for ${updated} device(s).`)
-        loadDevices({ silent: true })
-      }
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const handleRegisterSelected = async () => {
-    if (!selectedDeviceIds.length) {
-      setStatusMsg('Select at least one device.')
-      return
-    }
-
-    setBusyId('BATCH_REGISTER')
-    try {
-      const byId = new Map(devices.map(d => [d.DeviceID, d]))
-      let ok = 0
-      let total = 0
-      for (const id of selectedDeviceIds) {
-        const dev = byId.get(id)
-        if (!dev?.DeviceCode) continue
-        total += 1
-        try {
-          await api.registerDeviceConnection({
-            deviceCode: dev.DeviceCode,
-            deviceName: dev.DeviceName,
-            deviceType: dev.DeviceType || 'TCP',
-            serialNumber: dev.SerialNumber,
-            ipAddress: dev.IPAddress,
-            port: dev.Port,
-            registeredBy: 'UI_DEVICES'
-          })
-          ok += 1
-        } catch (_) {}
-      }
-      setStatusMsg(`Register complete: ${ok}/${total} device(s).`)
-      loadDevices({ silent: true })
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  const handleExportSelected = async () => {
-    if (!selectedDeviceIds.length) {
-      setStatusMsg('Select at least one device.')
-      return
-    }
-
-    setBusyId('BATCH_EXPORT')
-    try {
-      const byId = new Map(devices.map(d => [d.DeviceID, d]))
-      let ok = 0
-      let total = 0
-      for (const id of selectedDeviceIds) {
-        const dev = byId.get(id)
-        if (!dev?.DeviceCode) continue
-        total += 1
-        try {
-          const { blob, filename } = await api.exportDeviceLogsCsv({ deviceCode: dev.DeviceCode })
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = filename || `device-${dev.DeviceCode}-logs.csv`
-          document.body.appendChild(a)
-          a.click()
-          a.remove()
-          URL.revokeObjectURL(url)
-          ok += 1
-        } catch (_) {}
-      }
-      setStatusMsg(`Export complete: ${ok}/${total} file(s).`)
+      const result = await api.requestDeviceSyncBatch({ deviceIds: selectedDeviceIds })
+      const queued = result?.queued ?? 0
+      const requested = result?.requested ?? selectedDeviceIds.length
+      setStatusMsg(`Sync queued: ${queued}/${requested} device(s). Run the BiometricsBridge agent to process jobs.`)
+      loadSyncJobs({ silent: true })
+    } catch (err) {
+      setStatusMsg(`Sync queue failed: ${err.message || err}`)
     } finally {
       setBusyId(null)
     }
@@ -436,7 +254,7 @@ export default function DevicesPage() {
         </div>
         <button
           style={{
-            background: 'var(--primary)',
+            background: '#0f172a',
             color: '#fff',
             border: 'none',
             borderRadius: 6,
@@ -445,58 +263,11 @@ export default function DevicesPage() {
             cursor: 'pointer',
             opacity: busyId ? 0.6 : 1
           }}
-          onClick={handleRegisterSelected}
+          onClick={handleSyncSelected}
           disabled={!!busyId}
+          title="Queues a sync job. Requires BiometricsBridge to run in agent mode to pull logs from the device."
         >
-          Register Selected
-        </button>
-        <button
-          style={{
-            background: '#334155',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '6px 10px',
-            whiteSpace: 'nowrap',
-            cursor: 'pointer',
-            opacity: busyId ? 0.6 : 1
-          }}
-          onClick={handleTestSelected}
-          disabled={!!busyId}
-        >
-          Test Selected
-        </button>
-        <button
-          style={{
-            background: 'var(--primary)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '6px 10px',
-            whiteSpace: 'nowrap',
-            cursor: 'pointer',
-            opacity: busyId ? 0.6 : 1
-          }}
-          onClick={handleHeartbeatSelected}
-          disabled={!!busyId}
-        >
-          Heartbeat Selected
-        </button>
-        <button
-          style={{
-            background: '#0f1f3d',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 6,
-            padding: '6px 10px',
-            whiteSpace: 'nowrap',
-            cursor: 'pointer',
-            opacity: busyId ? 0.6 : 1
-          }}
-          onClick={handleExportSelected}
-          disabled={!!busyId}
-        >
-          Export Selected
+          Sync Selected
         </button>
         <button
           style={{
@@ -532,6 +303,40 @@ export default function DevicesPage() {
           Clear Selection
         </button>
       </div>
+
+      {syncJobs.length > 0 && (
+        <div style={{ marginBottom: 12, background: 'rgba(15, 23, 42, 0.04)', border: '1px solid rgba(148,163,184,0.35)', borderRadius: 10, padding: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 6 }}>
+            <div style={{ fontWeight: 700, color: '#0f172a' }}>Recent Sync Jobs</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Showing last {Math.min(syncJobs.length, 25)}</div>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr>
+                  {['Device', 'Status', 'Created', 'Started', 'Completed', 'Error'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid rgba(148,163,184,0.35)' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {syncJobs.slice(0, 25).map(j => (
+                  <tr key={j.JobID} style={{ borderBottom: '1px solid rgba(148,163,184,0.18)' }}>
+                    <td style={{ padding: '6px 8px', fontWeight: 700 }}>{j.DeviceCode || '-'}</td>
+                    <td style={{ padding: '6px 8px' }}>{j.Status || '-'}</td>
+                    <td style={{ padding: '6px 8px' }}>{j.CreatedAt ? new Date(j.CreatedAt).toLocaleString() : '-'}</td>
+                    <td style={{ padding: '6px 8px' }}>{j.StartedAt ? new Date(j.StartedAt).toLocaleString() : '-'}</td>
+                    <td style={{ padding: '6px 8px' }}>{j.CompletedAt ? new Date(j.CompletedAt).toLocaleString() : '-'}</td>
+                    <td style={{ padding: '6px 8px', maxWidth: 420, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={j.Error || ''}>
+                      {j.Error || ''}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <GenericDataTable
         title="Devices"
