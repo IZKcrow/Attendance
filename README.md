@@ -1,65 +1,111 @@
-# Attendance Frontend (Employees Directory)
+There are 3 main parts:
 
-Minimal React + Vite frontend showing employee data using MUI.
+The Biometric device (the scanner)
+The Server + Database (the brain + filing cabinet)
+The Website (the screen that admins use)
+1) What the biometric device really gives you
+The device is like a punch clock on a wall.
 
-Setup
+When someone scans, the device usually stores only things like:
 
-1. Install dependencies
+“User 248 scanned”
+“Time: 8:02 AM”
+maybe a mode (finger/face)
+It does not reliably store the full employee profile (full name, department, schedule rules).
+That’s why you can have logs with StaffCode/UserID but blank names.
 
-```bash
-npm install
-```
+So the device is not your “employee database”. It’s only a “scan event recorder”.
 
-2. Run dev server
+2) Why the server/database is needed
+The server + SQL Server database is where the real company rules live:
 
-```bash
-npm run dev
-```
+Employee list (names, departments, codes)
+Shift schedules (8–12 and 1–5, grace period, etc.)
+Attendance rules (late, early leave, half-day)
+Reports (weekly/monthly)
+Audit log (which admin changed what)
+This is why your system can become “smart”.
+The device alone can’t do that.
 
-Open the URL printed by Vite (typically http://localhost:5173).
+3) What the website does
+The website is like your admin dashboard:
 
-Notes
-- This project uses MUI for components. Sample employee data is in `src/data/employees.json`.
+Add/edit employees
+Assign shifts
+View attendance today / range
+Generate reports
+See imported device logs
+Manage admin accounts
+The website does not compute everything by itself.
+It mostly asks the server for data, then displays it nicely.
 
-Mock API (optional)
+The most important concept: “Raw logs” vs “Attendance record”
+Your system stores two different kinds of data:
 
-You can run a local mock API using `json-server`. This project includes a `mock` script that serves `src/data/employees.json` at `http://localhost:4000/employees`.
+A) Imported Logs (Raw device events)
+This is the “paper trail” of what the device said.
 
-Install dev deps and start the mock server:
+Example:
 
-```bash
-npm install
-npm run mock
-```
+Device 88
+StaffCode 248
+EventTime 2026-04-13 08:02
+This is stored in something like DeviceAttendanceEvents.
 
-Then start the frontend in another terminal:
+It’s useful because:
 
-```bash
-npm run dev
-```
+You can re-check what the scanner actually produced
+You can deduplicate (avoid importing the same scan twice)
+It’s evidence
+But raw logs don’t automatically mean “attendance is complete”.
 
-The frontend will call `http://localhost:4000` by default. To change the API base URL, set `VITE_API_URL` in your environment.
+B) AttendanceRecords (Daily summary per employee)
+This is where the system becomes “attendance” instead of “just logs”.
 
-Real MSSQL-backed API
+For each employee per day, you store:
 
-1. Copy `.env.example` to `.env` and fill in your MSSQL credentials.
+Morning Time In
+Morning Time Out
+Afternoon Time In
+Afternoon Time Out
+Status (On-Time, Late, Early Leave, Half-Day, Absent, etc.)
+This is what your dashboard and reports mainly use.
 
-2. Install dependencies (includes server packages):
+So the flow is basically:
+Device Logs → Imported Logs → AttendanceRecords → Dashboard/Reports
 
-```bash
-npm install
-```
+How it decides Late / Early Leave / Half-day / Absent
+The server compares:
 
-3. Start the backend server:
+what time they scanned
+vs
+what time they were supposed to scan (shift schedule)
+Your policy update means:
 
-```bash
-npm run server
-```
+If they time in early → no extra credit
+If they time in late → deduct
+If they time out late → no extra credit
+If they time out early → deduct
+So the system clamps the “paid hours” to the shift window:
 
-4. In another terminal start the frontend:
+early does not add
+late reduces
+And that’s why you changed Hours display to “7 hrs 55 mins” instead of “7.92”.
 
-```bash
-npm run dev
-```
+Why you have both React and C# (and how they communicate)
+React/Node is great for the website and database, but it cannot talk to the biometric SDK directly.
 
-The frontend uses `VITE_API_URL` (defaults to `http://localhost:4000`) to reach the backend.
+The C# app can talk to the device because:
+
+It loads the TM200 SDK DLLs
+It opens CommPort / IP / device ID
+It reads logs from the device
+So your architecture becomes:
+
+Website tells the server: “Sync device 88”
+Server places a “job”
+C# bridge picks up the job, connects to the device, downloads logs
+C# sends the results back to the server
+Server stores them → website displays them
+That makes the website able to “command” a sync without the browser needing device drivers.
+
