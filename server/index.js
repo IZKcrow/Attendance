@@ -586,6 +586,26 @@ BEGIN
   END
 END`,
 
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SpecialDays' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.SpecialDays (
+    SpecialDayID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    SpecialDate DATE NOT NULL,
+    DayType NVARCHAR(50) NOT NULL,
+    Description NVARCHAR(255) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UQ_SpecialDays_DateType' AND object_id = OBJECT_ID('dbo.SpecialDays'))
+  BEGIN
+    CREATE UNIQUE INDEX UQ_SpecialDays_DateType ON dbo.SpecialDays(SpecialDate, DayType)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_SpecialDays_Date' AND object_id = OBJECT_ID('dbo.SpecialDays'))
+  BEGIN
+    CREATE INDEX IX_SpecialDays_Date ON dbo.SpecialDays(SpecialDate)
+  END
+END`,
+
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DeviceSyncJobs' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.DeviceSyncJobs (
@@ -750,6 +770,34 @@ END`,
       `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Devices') AND name = 'DevicePassword')
 BEGIN
   ALTER TABLE dbo.Devices ADD DevicePassword INT NULL
+END`
+    ,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SpecialDays' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.SpecialDays (
+    SpecialDayID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    SpecialDate DATE NOT NULL,
+    DayType NVARCHAR(50) NOT NULL,
+    Description NVARCHAR(255) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UQ_SpecialDays_DateType' AND object_id = OBJECT_ID('dbo.SpecialDays'))
+  BEGIN
+    CREATE UNIQUE INDEX UQ_SpecialDays_DateType ON dbo.SpecialDays(SpecialDate, DayType)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_SpecialDays_Date' AND object_id = OBJECT_ID('dbo.SpecialDays'))
+  BEGIN
+    CREATE INDEX IX_SpecialDays_Date ON dbo.SpecialDays(SpecialDate)
+  END
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'UQ_SpecialDays_DateType' AND object_id = OBJECT_ID('dbo.SpecialDays'))
+BEGIN
+  CREATE UNIQUE INDEX UQ_SpecialDays_DateType ON dbo.SpecialDays(SpecialDate, DayType)
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_SpecialDays_Date' AND object_id = OBJECT_ID('dbo.SpecialDays'))
+BEGIN
+  CREATE INDEX IX_SpecialDays_Date ON dbo.SpecialDays(SpecialDate)
 END`
     ,
       `IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'MorningTimeOut' AND is_nullable = 0)
@@ -3803,8 +3851,325 @@ app.post('/audit-logs', requireAdmin, async (req, res) => {
   }
 })
 
-app.get('/special-days', async (req, res) => res.json([]))
-app.post('/special-days', async (req, res) => res.status(501).json({ error: 'Special days are not implemented in new schema' }))
+function normalizeSpecialDayType(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  return raw
+    .replace(/\s+/g, '_')
+    .replace(/-+/g, '_')
+    .toUpperCase()
+}
+
+function isValidIsoDate(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+app.get('/special-days', requireAdmin, async (req, res) => {
+  try {
+    const pool = await getPool()
+    const result = await pool.request().query(`
+      SELECT
+        SpecialDayID,
+        CONVERT(varchar(10), SpecialDate, 23) AS SpecialDate,
+        DayType,
+        Description,
+        CreatedAt,
+        UpdatedAt
+      FROM dbo.SpecialDays
+      ORDER BY SpecialDate DESC, DayType ASC
+    `)
+    res.json(result.recordset)
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('invalid object name') && msg.toLowerCase().includes('specialdays')) {
+      return res.status(503).json({ error: 'SpecialDays table is not initialized yet. Restart the backend server to run migrations.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.post('/special-days', requireAdmin, async (req, res) => {
+  const SpecialDate = String(req.body?.SpecialDate || req.body?.specialDate || '').trim()
+  const DayType = normalizeSpecialDayType(req.body?.DayType || req.body?.dayType)
+  const Description = (req.body?.Description ?? req.body?.description ?? null)
+  if (!isValidIsoDate(SpecialDate)) return res.status(400).json({ error: 'SpecialDate is required (YYYY-MM-DD)' })
+  if (!DayType) return res.status(400).json({ error: 'DayType is required (e.g. HOLIDAY, REST_DAY, HALF_DAY_AM, HALF_DAY_PM)' })
+
+  try {
+    const pool = await getPool()
+    const { randomUUID } = require('crypto')
+    const id = randomUUID()
+    const insert = await pool.request()
+      .input('SpecialDayID', sql.NVarChar(36), id)
+      .input('SpecialDate', sql.Date, SpecialDate)
+      .input('DayType', sql.NVarChar(50), DayType)
+      .input('Description', sql.NVarChar(255), Description ? String(Description) : null)
+      .query(`
+        INSERT INTO dbo.SpecialDays (SpecialDayID, SpecialDate, DayType, Description)
+        OUTPUT INSERTED.SpecialDayID,
+               CONVERT(varchar(10), INSERTED.SpecialDate, 23) AS SpecialDate,
+               INSERTED.DayType,
+               INSERTED.Description,
+               INSERTED.CreatedAt,
+               INSERTED.UpdatedAt
+        VALUES (@SpecialDayID, @SpecialDate, @DayType, @Description)
+      `)
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'CREATE',
+      tableName: 'SpecialDays',
+      recordID: id,
+      afterJson: JSON.stringify(insert.recordset?.[0] || {})
+    })
+
+    res.json(insert.recordset[0])
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('cannot insert duplicate key') || msg.toLowerCase().includes('unique')) {
+      return res.status(409).json({ error: 'Special day already exists for that date/type.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.put('/special-days/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params?.id || '').trim()
+  if (!id) return res.status(400).json({ error: 'SpecialDayID is required' })
+
+  const SpecialDate = req.body?.SpecialDate !== undefined ? String(req.body?.SpecialDate || '').trim() : null
+  const DayType = req.body?.DayType !== undefined ? normalizeSpecialDayType(req.body?.DayType) : null
+  const Description = req.body?.Description !== undefined ? (req.body?.Description ?? null) : undefined
+
+  if (SpecialDate !== null && !isValidIsoDate(SpecialDate)) return res.status(400).json({ error: 'SpecialDate must be YYYY-MM-DD' })
+
+  try {
+    const pool = await getPool()
+    const before = await pool.request().input('SpecialDayID', sql.NVarChar(36), id).query(`
+      SELECT TOP 1 SpecialDayID, CONVERT(varchar(10), SpecialDate, 23) AS SpecialDate, DayType, Description
+      FROM dbo.SpecialDays WHERE SpecialDayID=@SpecialDayID
+    `)
+    if (!before.recordset?.length) return res.status(404).json({ error: 'Not found' })
+
+    const req0 = pool.request().input('SpecialDayID', sql.NVarChar(36), id)
+    if (SpecialDate !== null) req0.input('SpecialDate', sql.Date, SpecialDate || null)
+    if (DayType !== null) req0.input('DayType', sql.NVarChar(50), DayType || null)
+    if (Description !== undefined) req0.input('Description', sql.NVarChar(255), Description ? String(Description) : null)
+
+    const setParts = []
+    if (SpecialDate !== null) setParts.push('SpecialDate=@SpecialDate')
+    if (DayType !== null) setParts.push('DayType=@DayType')
+    if (Description !== undefined) setParts.push('Description=@Description')
+    setParts.push('UpdatedAt=GETDATE()')
+
+    const updated = await req0.query(`
+      UPDATE dbo.SpecialDays
+      SET ${setParts.join(', ')}
+      OUTPUT INSERTED.SpecialDayID,
+             CONVERT(varchar(10), INSERTED.SpecialDate, 23) AS SpecialDate,
+             INSERTED.DayType,
+             INSERTED.Description,
+             INSERTED.CreatedAt,
+             INSERTED.UpdatedAt
+      WHERE SpecialDayID=@SpecialDayID
+    `)
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'UPDATE',
+      tableName: 'SpecialDays',
+      recordID: id,
+      beforeJson: JSON.stringify(before.recordset[0]),
+      afterJson: JSON.stringify(updated.recordset?.[0] || {})
+    })
+
+    res.json(updated.recordset[0])
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('cannot insert duplicate key') || msg.toLowerCase().includes('unique')) {
+      return res.status(409).json({ error: 'Special day already exists for that date/type.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.delete('/special-days/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params?.id || '').trim()
+  if (!id) return res.status(400).json({ error: 'SpecialDayID is required' })
+
+  try {
+    const pool = await getPool()
+    const before = await pool.request().input('SpecialDayID', sql.NVarChar(36), id).query(`
+      SELECT TOP 1 SpecialDayID, CONVERT(varchar(10), SpecialDate, 23) AS SpecialDate, DayType, Description
+      FROM dbo.SpecialDays WHERE SpecialDayID=@SpecialDayID
+    `)
+    const del = await pool.request().input('SpecialDayID', sql.NVarChar(36), id).query(`
+      DELETE FROM dbo.SpecialDays WHERE SpecialDayID=@SpecialDayID
+    `)
+    if ((del.rowsAffected?.[0] || 0) === 0) return res.status(404).json({ error: 'Not found' })
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'DELETE',
+      tableName: 'SpecialDays',
+      recordID: id,
+      beforeJson: JSON.stringify(before.recordset?.[0] || {})
+    })
+
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+function isoDate(y, m, d) {
+  const yyyy = String(y).padStart(4, '0')
+  const mm = String(m).padStart(2, '0')
+  const dd = String(d).padStart(2, '0')
+  return `${yyyy}-${mm}-${dd}`
+}
+
+function easterSundayUtc(year) {
+  // Anonymous Gregorian algorithm.
+  const a = year % 19
+  const b = Math.floor(year / 100)
+  const c = year % 100
+  const d = Math.floor(b / 4)
+  const e = b % 4
+  const f = Math.floor((b + 8) / 25)
+  const g = Math.floor((b - f + 1) / 3)
+  const h = (19 * a + b - d - g + 15) % 30
+  const i = Math.floor(c / 4)
+  const k = c % 4
+  const l = (32 + 2 * e + 2 * i - h - k) % 7
+  const m = Math.floor((a + 11 * h + 22 * l) / 451)
+  const month = Math.floor((h + l - 7 * m + 114) / 31) // 3=March, 4=April
+  const day = ((h + l - 7 * m + 114) % 31) + 1
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
+function addDaysUtc(date, days) {
+  return new Date(date.getTime() + days * 86400000)
+}
+
+function lastMondayOfMonthUtc(year, month1to12) {
+  const last = new Date(Date.UTC(year, month1to12, 0)) // last day of month
+  const dow = last.getUTCDay() // 0=Sun..6=Sat
+  const offset = (dow + 6) % 7 // days since Monday
+  return addDaysUtc(last, -offset)
+}
+
+function generatePhilippinesHolidays(year) {
+  const items = []
+
+  const fixed = [
+    { m: 1, d: 1, desc: "New Year's Day" },
+    { m: 2, d: 25, desc: 'EDSA People Power Revolution Anniversary' },
+    { m: 4, d: 9, desc: 'Day of Valor' },
+    { m: 5, d: 1, desc: 'Labor Day' },
+    { m: 6, d: 12, desc: 'Independence Day' },
+    { m: 8, d: 21, desc: 'Ninoy Aquino Day' },
+    { m: 11, d: 1, desc: "All Saints' Day" },
+    { m: 11, d: 30, desc: 'Bonifacio Day' },
+    { m: 12, d: 8, desc: 'Immaculate Conception' },
+    { m: 12, d: 25, desc: 'Christmas Day' },
+    { m: 12, d: 30, desc: 'Rizal Day' },
+    { m: 12, d: 31, desc: "New Year's Eve" }
+  ]
+  for (const h of fixed) {
+    items.push({ SpecialDate: isoDate(year, h.m, h.d), DayType: 'HOLIDAY', Description: h.desc })
+  }
+
+  // National Heroes Day: last Monday of August
+  try {
+    const nhd = lastMondayOfMonthUtc(year, 8)
+    items.push({ SpecialDate: isoDate(year, nhd.getUTCMonth() + 1, nhd.getUTCDate()), DayType: 'HOLIDAY', Description: 'National Heroes Day' })
+  } catch (_) {}
+
+  // Holy Week (commonly observed): Maundy Thursday, Good Friday, Black Saturday
+  try {
+    const easter = easterSundayUtc(year)
+    const maundyThu = addDaysUtc(easter, -3)
+    const goodFri = addDaysUtc(easter, -2)
+    const blackSat = addDaysUtc(easter, -1)
+    items.push({ SpecialDate: isoDate(year, maundyThu.getUTCMonth() + 1, maundyThu.getUTCDate()), DayType: 'HOLIDAY', Description: 'Maundy Thursday' })
+    items.push({ SpecialDate: isoDate(year, goodFri.getUTCMonth() + 1, goodFri.getUTCDate()), DayType: 'HOLIDAY', Description: 'Good Friday' })
+    items.push({ SpecialDate: isoDate(year, blackSat.getUTCMonth() + 1, blackSat.getUTCDate()), DayType: 'HOLIDAY', Description: 'Black Saturday' })
+  } catch (_) {}
+
+  // Deduplicate in-memory (date+type)
+  const seen = new Set()
+  const out = []
+  for (const it of items) {
+    const key = `${it.SpecialDate}|${it.DayType}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(it)
+  }
+  return out
+}
+
+app.post('/special-days/generate-year', requireAdmin, async (req, res) => {
+  const year = Number(req.body?.year || req.body?.Year || 0)
+  const overwriteExisting = !!(req.body?.overwriteExisting || req.body?.OverwriteExisting)
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    return res.status(400).json({ error: 'year must be a number between 2000 and 2100' })
+  }
+
+  const generated = generatePhilippinesHolidays(year)
+  if (!generated.length) return res.json({ year, inserted: 0, skipped: 0, total: 0 })
+
+  try {
+    const pool = await getPool()
+    let inserted = 0
+    let skipped = 0
+
+    for (const it of generated) {
+      if (overwriteExisting) {
+        await pool.request()
+          .input('SpecialDate', sql.Date, it.SpecialDate)
+          .input('DayType', sql.NVarChar(50), it.DayType)
+          .query('DELETE FROM dbo.SpecialDays WHERE SpecialDate=@SpecialDate AND DayType=@DayType')
+      }
+
+      const { randomUUID } = require('crypto')
+      const id = randomUUID()
+      const r = await pool.request()
+        .input('SpecialDayID', sql.NVarChar(36), id)
+        .input('SpecialDate', sql.Date, it.SpecialDate)
+        .input('DayType', sql.NVarChar(50), it.DayType)
+        .input('Description', sql.NVarChar(255), it.Description || null)
+        .query(`
+          IF NOT EXISTS (SELECT 1 FROM dbo.SpecialDays WHERE SpecialDate=@SpecialDate AND DayType=@DayType)
+          BEGIN
+            INSERT INTO dbo.SpecialDays (SpecialDayID, SpecialDate, DayType, Description)
+            VALUES (@SpecialDayID, @SpecialDate, @DayType, @Description)
+            SELECT 1 AS inserted
+          END
+          ELSE
+          BEGIN
+            SELECT 0 AS inserted
+          END
+        `)
+
+      const didInsert = (r.recordset?.[0]?.inserted || 0) === 1
+      if (didInsert) inserted += 1
+      else skipped += 1
+    }
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'GENERATE_YEAR',
+      tableName: 'SpecialDays',
+      recordID: String(year),
+      afterJson: JSON.stringify({ year, inserted, skipped, overwriteExisting })
+    })
+
+    res.json({ year, inserted, skipped, total: generated.length, overwriteExisting })
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
 
 app.get('/attendance/today', async (req, res) => {
   const t0 = Date.now()
@@ -3813,122 +4178,120 @@ app.get('/attendance/today', async (req, res) => {
     const now = new Date()
     const today = now.toISOString().split('T')[0]
     const todayDay = now.getDay() === 0 ? 7 : now.getDay()
-    const q = `SELECT
-      a.AttendanceID,
-      a.EmployeeID,
-      e.EmployeeCode,
-      CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
-      CONVERT(varchar(10), a.AttendanceDate, 23) AS AttendanceDate,
-      CONVERT(varchar(5), a.MorningTimeIn, 108) AS MorningTimeIn,
-      CONVERT(varchar(5), a.MorningTimeOut, 108) AS MorningTimeOut,
-      CONVERT(varchar(5), a.AfternoonTimeIn, 108) AS AfternoonTimeIn,
-      CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
-      sched.ShiftName,
-      ISNULL(sched.GracePeriodMinutes, 0) AS GracePeriodMinutes,
-      CONVERT(varchar(5), sched.ReqMorningIn, 108) AS RequiredMorningIn,
-      CONVERT(varchar(5), sched.ReqMorningOut, 108) AS RequiredMorningOut,
-      CONVERT(varchar(5), sched.ReqAfternoonIn, 108) AS RequiredAfternoonIn,
-      CONVERT(varchar(5), sched.ReqAfternoonOut, 108) AS RequiredAfternoonOut,
-      CASE
-        WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
-        WHEN a.MorningTimeIn IS NULL THEN 'Absent'
-        WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
-        WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
-        ELSE 'On-Time'
-      END AS MorningInStatus,
-      CASE
-        WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
-        WHEN a.MorningTimeOut IS NULL THEN 'Missing'
-        WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
-        WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
-        ELSE 'On-Time'
-      END AS MorningOutStatus,
-      CASE
-        WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
-        WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
-        WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
-        WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
-        ELSE 'On-Time'
-      END AS AfternoonInStatus,
-      CASE
-        WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
-        WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
-        WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
-        WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
-        ELSE 'On-Time'
-      END AS AfternoonOutStatus,
-      CASE
-        WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
-        WHEN
-          (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
-          OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
-          OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
-          OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL)
-        THEN 'Incomplete'
-        WHEN
-          (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
-          OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL)
-        THEN 'Half-Day'
-        WHEN
-          (CASE
-            WHEN sched.ReqMorningIn IS NULL THEN 'No Shift'
-            WHEN a.MorningTimeIn IS NULL THEN 'Absent'
-            WHEN a.MorningTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Early-In'
-            WHEN a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
-            ELSE 'On-Time'
-          END) = 'Late'
-          OR
-          (CASE
-            WHEN sched.ReqAfternoonIn IS NULL THEN 'No Shift'
-            WHEN a.AfternoonTimeIn IS NULL THEN 'Absent'
-            WHEN a.AfternoonTimeIn < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Early-In'
-            WHEN a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
-            ELSE 'On-Time'
-          END) = 'Late'
-        THEN 'Late'
-        WHEN
-          (CASE
-            WHEN sched.ReqMorningOut IS NULL THEN 'No Shift'
-            WHEN a.MorningTimeOut IS NULL THEN 'Missing'
-            WHEN a.MorningTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Early-Out'
-            WHEN a.MorningTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningOut) THEN 'Late-Out'
-            ELSE 'On-Time'
-          END) = 'Early-Out'
-          OR
-          (CASE
-            WHEN sched.ReqAfternoonOut IS NULL THEN 'No Shift'
-            WHEN a.AfternoonTimeOut IS NULL THEN 'Missing'
-            WHEN a.AfternoonTimeOut < DATEADD(MINUTE, -ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Early-Out'
-            WHEN a.AfternoonTimeOut > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonOut) THEN 'Late-Out'
-            ELSE 'On-Time'
-          END) = 'Early-Out'
-        THEN 'Early Leave'
-        ELSE ISNULL(a.Status, 'Present')
-      END AS AttendanceSummary
-      FROM dbo.AttendanceRecords a
-      JOIN dbo.Employees e ON a.EmployeeID = e.EmployeeID
-      OUTER APPLY (
-        SELECT TOP 1
-          s.ShiftName,
-          ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
-          ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
-          ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
-          ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
-          ISNULL(dss.GracePeriodMinutes, s.GracePeriodMinutes) AS GracePeriodMinutes
-        FROM dbo.EmployeeShiftAllotments sa
-        JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID
-        JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID AND sd.DayOfWeek = @todayDay
-        LEFT JOIN dbo.ShiftDaySchedules dss ON dss.ShiftID = s.ShiftID AND dss.DayOfWeek = @todayDay
-        WHERE sa.EmployeeID = a.EmployeeID
-          AND @today BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, @today)
-        ORDER BY sa.EffectiveFrom DESC
-      ) sched
-      WHERE AttendanceDate = @today
-      ORDER BY a.MorningTimeIn DESC`
+
     const result = await pool.request()
       .input('today', sql.Date, today)
       .input('todayDay', sql.Int, todayDay)
-      .query(q)
+      .query(`
+        SET DATEFIRST 1;
+
+        ;WITH ShiftPick AS (
+          SELECT
+              e.EmployeeID,
+              e.EmployeeCode,
+              CONCAT(e.FirstName,' ',e.LastName) AS EmployeeName,
+              s.ShiftName,
+              COALESCE(dss.MorningTimeIn,  s.MorningTimeIn)   AS ReqMorningIn,
+              COALESCE(dss.MorningTimeOut, s.MorningTimeOut)  AS ReqMorningOut,
+              COALESCE(dss.AfternoonTimeIn,  s.AfternoonTimeIn)   AS ReqAfternoonIn,
+              COALESCE(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
+              COALESCE(dss.GracePeriodMinutes, s.GracePeriodMinutes, 0) AS GracePeriodMinutes,
+              ROW_NUMBER() OVER (PARTITION BY e.EmployeeID ORDER BY sa.EffectiveFrom DESC) AS rn
+          FROM dbo.EmployeeShiftAllotments sa
+          JOIN dbo.ShiftDefinitions s
+            ON sa.ShiftID = s.ShiftID
+          JOIN dbo.Employees e
+            ON e.EmployeeID = sa.EmployeeID
+          LEFT JOIN dbo.ShiftDays sd
+            ON sd.ShiftID = s.ShiftID AND sd.DayOfWeek = @todayDay
+          LEFT JOIN dbo.ShiftDaySchedules dss
+            ON dss.ShiftID = s.ShiftID AND dss.DayOfWeek = @todayDay
+          WHERE @today BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, @today)
+            AND (sd.DayOfWeek IS NULL OR sd.DayOfWeek = @todayDay)
+        )
+        SELECT
+            ISNULL(a.AttendanceID, NEWID()) AS AttendanceID,
+            sp.EmployeeID,
+            sp.EmployeeCode,
+            sp.EmployeeName,
+            CONVERT(varchar(10), @today, 23) AS AttendanceDate,
+            CONVERT(varchar(5), a.MorningTimeIn, 108)    AS MorningTimeIn,
+            CONVERT(varchar(5), a.MorningTimeOut, 108)   AS MorningTimeOut,
+            CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
+            CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+            sp.ShiftName,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sp.ReqMorningIn END,
+            108) AS RequiredMorningIn,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sp.ReqMorningOut END,
+            108) AS RequiredMorningOut,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sp.ReqAfternoonIn END,
+            108) AS RequiredAfternoonIn,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sp.ReqAfternoonOut END,
+            108) AS RequiredAfternoonOut,
+            sp.GracePeriodMinutes,
+            sd.DayType AS SpecialDayType,
+            sd.Description AS SpecialDayDescription,
+            CASE
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'HOLIDAY'
+                THEN CASE
+                  WHEN a.AttendanceID IS NULL THEN 'Holiday'
+                  WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Holiday'
+                  ELSE 'Holiday (Worked)'
+                END
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'REST_DAY'
+                THEN CASE
+                  WHEN a.AttendanceID IS NULL THEN 'Rest Day'
+                  WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Rest Day'
+                  ELSE 'Rest Day (Worked)'
+                END
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) LIKE 'HALF_DAY%'
+                THEN 'Half-Day'
+              WHEN a.AttendanceID IS NULL THEN 'Absent'
+              WHEN
+                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+                OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
+              WHEN
+                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
+              WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
+              WHEN a.AfternoonTimeIn IS NOT NULL
+                   AND sp.ReqAfternoonIn IS NOT NULL
+                   AND a.AfternoonTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqAfternoonIn) THEN 'Late'
+              WHEN a.MorningTimeOut IS NOT NULL
+                   AND sp.ReqMorningOut IS NOT NULL
+                   AND a.MorningTimeOut < sp.ReqMorningOut THEN 'Early Leave'
+              WHEN a.AfternoonTimeOut IS NOT NULL
+                   AND sp.ReqAfternoonOut IS NOT NULL
+                   AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
+              ELSE 'On-Time'
+            END AS AttendanceSummary
+        FROM ShiftPick sp
+        LEFT JOIN dbo.AttendanceRecords a
+               ON a.EmployeeID = sp.EmployeeID
+              AND a.AttendanceDate = @today
+        OUTER APPLY (
+          SELECT TOP 1 DayType, Description
+          FROM dbo.SpecialDays sd0
+          WHERE sd0.SpecialDate = @today
+          ORDER BY
+            CASE
+              WHEN UPPER(sd0.DayType) = 'HOLIDAY' THEN 1
+              WHEN UPPER(sd0.DayType) = 'REST_DAY' THEN 2
+              WHEN UPPER(sd0.DayType) LIKE 'HALF_DAY%' THEN 3
+              ELSE 99
+            END,
+            sd0.DayType ASC
+        ) sd
+        WHERE sp.rn = 1
+        ORDER BY sp.EmployeeName ASC
+        OPTION (RECOMPILE);
+      `)
     console.log(`[perf] /attendance/today rows=${result.recordset?.length || 0} ms=${Date.now() - t0}`)
     res.json(result.recordset)
   } catch (err) {
@@ -3999,12 +4362,36 @@ app.post('/attendance/range', async (req, res) => {
             CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
             CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
             sp.ShiftName,
-            CONVERT(varchar(5), sp.ReqMorningIn, 108)     AS RequiredMorningIn,
-            CONVERT(varchar(5), sp.ReqMorningOut, 108)    AS RequiredMorningOut,
-            CONVERT(varchar(5), sp.ReqAfternoonIn, 108)   AS RequiredAfternoonIn,
-            CONVERT(varchar(5), sp.ReqAfternoonOut, 108)  AS RequiredAfternoonOut,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sp.ReqMorningIn END,
+            108) AS RequiredMorningIn,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sp.ReqMorningOut END,
+            108) AS RequiredMorningOut,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sp.ReqAfternoonIn END,
+            108) AS RequiredAfternoonIn,
+            CONVERT(varchar(5),
+              CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sp.ReqAfternoonOut END,
+            108) AS RequiredAfternoonOut,
             sp.GracePeriodMinutes,
+            sd.DayType AS SpecialDayType,
+            sd.Description AS SpecialDayDescription,
             CASE
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'HOLIDAY'
+                THEN CASE
+                  WHEN a.AttendanceID IS NULL THEN 'Holiday'
+                  WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Holiday'
+                  ELSE 'Holiday (Worked)'
+                END
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'REST_DAY'
+                THEN CASE
+                  WHEN a.AttendanceID IS NULL THEN 'Rest Day'
+                  WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Rest Day'
+                  ELSE 'Rest Day (Worked)'
+                END
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) LIKE 'HALF_DAY%'
+                THEN 'Half-Day'
               WHEN a.AttendanceID IS NULL THEN 'Absent'
               WHEN
                 (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
@@ -4016,6 +4403,7 @@ app.post('/attendance/range', async (req, res) => {
                 OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
               WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
               WHEN a.AfternoonTimeIn IS NOT NULL
+                   AND sp.ReqAfternoonIn IS NOT NULL
                    AND a.AfternoonTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqAfternoonIn) THEN 'Late'
               WHEN a.MorningTimeOut IS NOT NULL
                    AND sp.ReqMorningOut IS NOT NULL
@@ -4029,6 +4417,19 @@ app.post('/attendance/range', async (req, res) => {
         LEFT JOIN dbo.AttendanceRecords a
                ON a.EmployeeID = sp.EmployeeID
               AND a.AttendanceDate = sp.dt
+        OUTER APPLY (
+          SELECT TOP 1 DayType, Description
+          FROM dbo.SpecialDays sd0
+          WHERE sd0.SpecialDate = sp.dt
+          ORDER BY
+            CASE
+              WHEN UPPER(sd0.DayType) = 'HOLIDAY' THEN 1
+              WHEN UPPER(sd0.DayType) = 'REST_DAY' THEN 2
+              WHEN UPPER(sd0.DayType) LIKE 'HALF_DAY%' THEN 3
+              ELSE 99
+            END,
+            sd0.DayType ASC
+        ) sd
         WHERE sp.dt BETWEEN @from AND @to
           AND sp.dt <= CAST(GETDATE() AS DATE)
           AND sp.rn = 1

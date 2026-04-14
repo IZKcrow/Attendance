@@ -6,7 +6,14 @@ export const APP_ALERT_SX = {
   borderRadius: 2,
   boxShadow: '0 10px 24px rgba(0,0,0,0.18)',
   fontWeight: 700,
-  alignItems: 'center'
+  alignItems: 'center',
+  '& .MuiAlert-action': {
+    alignItems: 'center',
+    paddingTop: 0
+  },
+  '& .MuiAlert-action .MuiIconButton-root': {
+    color: 'inherit'
+  }
 }
 
 let idCounter = 0
@@ -56,8 +63,18 @@ export function useSnackbar({
       action = null
     } = options
 
-    // By default, keep errors visible until dismissed.
-    const persist = typeof persistOpt === 'boolean' ? persistOpt : severity === 'error'
+    // Default behavior: auto-hide, but always show a close (X) button.
+    // Use persist:true for critical prompts you want to keep until dismissed.
+    const persist = typeof persistOpt === 'boolean' ? persistOpt : false
+
+    const effectiveDuration = (() => {
+      if (persist) return null
+      if (overrideDuration === null) return null
+      // If the caller didn't specify a duration and it's an error, keep it a bit longer by default.
+      if (persistOpt === undefined && severity === 'error' && overrideDuration === autoHideDuration) return 6000
+      if (Number.isFinite(overrideDuration)) return overrideDuration
+      return severity === 'error' ? 6000 : autoHideDuration
+    })()
 
     const id = idCounter++
     const snack = {
@@ -66,7 +83,7 @@ export function useSnackbar({
       severity,
       action,
       persist: persist === true,
-      autoHideDuration: persist ? null : overrideDuration
+      autoHideDuration: effectiveDuration
     }
 
     setSnacks((prev) => {

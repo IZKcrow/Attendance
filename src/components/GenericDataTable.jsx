@@ -6,9 +6,59 @@ import {
   Box, TextField, CircularProgress, Alert, TablePagination, InputAdornment
 } from '@mui/material'
 import EditIcon from '@mui/icons-material/Edit'
+import DeleteIcon from '@mui/icons-material/Delete'
 import AddIcon from '@mui/icons-material/Add'
 import SearchIcon from '@mui/icons-material/Search'
 import { useSnackbar, APP_ALERT_SX } from './ui/Snackbar'
+
+function pad2(n) {
+  return String(n).padStart(2, '0')
+}
+
+function toDateInput(value) {
+  if (!value) return ''
+  if (typeof value === 'string') {
+    const m = value.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (m) return m[1]
+  }
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  // Use local getters to avoid timezone shifting for DATE-only values.
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+function toTimeInput(value) {
+  if (!value) return ''
+  if (typeof value === 'string') {
+    const m = value.match(/^(\d{2}:\d{2})/)
+    if (m) return m[1]
+  }
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+function toDatetimeLocalInput(value) {
+  if (!value) return ''
+  if (typeof value === 'string') {
+    const m = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/)
+    if (m) return m[1]
+  }
+  const d = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+}
+
+function normalizeFormForSchema(formObj, schema) {
+  const next = { ...(formObj || {}) }
+  for (const key of Object.keys(next)) {
+    const t = schema?.[key]?.type
+    if (t === 'date') next[key] = toDateInput(next[key])
+    else if (t === 'time') next[key] = toTimeInput(next[key])
+    else if (t === 'datetime-local') next[key] = toDatetimeLocalInput(next[key])
+  }
+  return next
+}
 
 export default function GenericDataTable({
   title,
@@ -28,11 +78,13 @@ export default function GenericDataTable({
   allowDelete = !readOnly,
   onRowClick = null,
   columnSchema = {},
-  useDeleteDialog = true
+  useDeleteDialog = true,
+  defaultFormValues = {},
+  showRowDelete = false
 }) {
   const { show, SnackbarComponent } = useSnackbar()
   // Per-row delete is intentionally hidden (bulk deletion is used instead).
-  const showActions = allowEdit
+  const showActions = allowEdit || (showRowDelete && allowDelete)
 
   const columnDefs = React.useMemo(() => {
     const cols = Array.isArray(columns) ? columns : []
@@ -58,27 +110,28 @@ export default function GenericDataTable({
   const [form, setForm] = React.useState({})
   const [search, setSearch] = React.useState('')
   const [deleteTarget, setDeleteTarget] = React.useState(null)
-  const [localError, setLocalError] = React.useState(null)
+  const [dismissedError, setDismissedError] = React.useState(false)
+
+  React.useEffect(() => {
+    setDismissedError(false)
+  }, [error])
 
   const handleOpenAdd = React.useCallback(() => {
     setEditing(null)
-    setForm({})
-    setLocalError(null)
+    setForm({ ...(defaultFormValues || {}) })
     setDialogOpen(true)
-  }, [])
+  }, [defaultFormValues])
 
   const handleOpenEdit = React.useCallback((row) => {
     setEditing(row)
-    setForm({ ...row })
-    setLocalError(null)
+    setForm(normalizeFormForSchema(row, columnSchema))
     setDialogOpen(true)
-  }, [])
+  }, [columnSchema])
 
   const handleClose = React.useCallback(() => setDialogOpen(false), [])
 
   const handleSave = React.useCallback(async () => {
     try {
-      setLocalError(null)
       if (editing) {
         // Merge form changes with original record to preserve unedited fields
         const updatedData = { ...editing, ...form }
@@ -89,7 +142,6 @@ export default function GenericDataTable({
       setDialogOpen(false)
     } catch (err) {
       const msg = err?.message || 'Save failed'
-      setLocalError(msg)
       show(msg, 'error')
     }
   }, [editing, form, onAdd, onEdit, show])
@@ -99,22 +151,18 @@ export default function GenericDataTable({
     const id = row?.[primaryKeyField]
     if (!id) {
       const msg = `Missing key field: ${primaryKeyField}`
-      setLocalError(msg)
       show(msg, 'error')
       return
     }
     try {
-      setLocalError(null)
       await onDelete(id)
     } catch (err) {
       const msg = err?.message || 'Delete failed'
-      setLocalError(msg)
       show(msg, 'error')
     }
   }, [onDelete, primaryKeyField, show])
 
   const handleDeleteClick = React.useCallback((row) => {
-    setLocalError(null)
     if (!useDeleteDialog) {
       handleDeleteImmediate(row)
       return
@@ -127,17 +175,14 @@ export default function GenericDataTable({
     const id = deleteTarget?.[primaryKeyField]
     if (!id) {
       const msg = `Missing key field: ${primaryKeyField}`
-      setLocalError(msg)
       show(msg, 'error')
       return
     }
     try {
-      setLocalError(null)
       await onDelete(id)
       setDeleteTarget(null)
     } catch (err) {
       const msg = err?.message || 'Delete failed'
-      setLocalError(msg)
       show(msg, 'error')
     }
   }, [deleteTarget, onDelete, primaryKeyField, show])
@@ -210,9 +255,14 @@ export default function GenericDataTable({
         />
       </Box>
 
-      {(error || localError) && (
-        <Alert severity="error" variant="filled" sx={{ ...APP_ALERT_SX, mt: 1, mb: 1 }}>
-          {error || localError}
+      {error && !dismissedError && (
+        <Alert
+          severity="error"
+          variant="filled"
+          sx={{ ...APP_ALERT_SX, mt: 1, mb: 1 }}
+          onClose={() => setDismissedError(true)}
+        >
+          {error}
         </Alert>
       )}
 
@@ -241,8 +291,8 @@ export default function GenericDataTable({
             }
           }}
         >
-          <TableHead>
-            <TableRow>
+      <TableHead>
+        <TableRow>
               {columnDefs.map(col => (
                 <TableCell key={col.key}>
                   {col.header ? col.header : <strong>{col.label}</strong>}
@@ -271,6 +321,16 @@ export default function GenericDataTable({
                     <>
                       {allowEdit && (
                         <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}><EditIcon fontSize="small" /></IconButton>
+                      )}
+                      {showRowDelete && allowDelete && (
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={(e) => { e.stopPropagation(); handleDeleteClick(row) }}
+                          sx={{ ml: 0.5 }}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
                       )}
                     </>
                   )}
@@ -305,6 +365,11 @@ export default function GenericDataTable({
                 fullWidth
                 label={col}
                 type={columnSchema[col]?.type || 'text'}
+                InputLabelProps={(() => {
+                  const t = columnSchema[col]?.type
+                  if (['date', 'time', 'datetime-local', 'month'].includes(t)) return { shrink: true }
+                  return undefined
+                })()}
                 value={form[col] ?? ''}
                 onChange={(e) => setForm((prev) => ({ ...prev, [col]: e.target.value }))}
               />

@@ -26,7 +26,14 @@ function buildApiError(res, text) {
     message = payload.error || payload.message || ''
   }
   if (!message) {
-    message = text || `${res.status} ${res.statusText}`
+    const raw = String(text || '')
+    const isHtml = raw.trim().toLowerCase().startsWith('<!doctype html') || raw.trim().toLowerCase().startsWith('<html')
+    if (isHtml && raw.includes('Cannot POST')) {
+      // Common local-dev confusion: json-server mock is running instead of the real backend.
+      message = `Endpoint not available on the current backend. Ensure the real backend is running (run "npm run server", not "npm run mock").`
+    } else {
+      message = raw || `${res.status} ${res.statusText}`
+    }
   }
   if (!message) {
     message = 'Request failed'
@@ -488,6 +495,15 @@ export async function fetchAuditLogs() {
 
 export async function fetchSpecialDays() {
   return fetchAll('special-days')
+}
+
+export async function generateSpecialDaysYear(year, overwriteExisting = false) {
+  const res = await fetch(`${BASE}/special-days/generate-year`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ year, overwriteExisting })
+  })
+  return handleRes(res)
 }
 
 export async function createSpecialDay(data) {

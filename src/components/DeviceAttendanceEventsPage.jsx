@@ -1,5 +1,5 @@
 import React from 'react'
-import { TableCell } from '@mui/material'
+import { Box, Button, Paper, TableCell, TextField } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
 
@@ -8,6 +8,39 @@ function fmtDateTime(value) {
   const d = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(d.getTime())) return String(value)
   return d.toLocaleString()
+}
+
+const filterCardSx = {
+  display: 'flex',
+  gap: 2,
+  rowGap: 1.5,
+  flexWrap: 'wrap',
+  alignItems: 'flex-end',
+  justifyContent: 'space-between',
+  padding: 2,
+  marginBottom: 2,
+  backgroundColor: 'var(--card)',
+  border: '1px solid var(--border)',
+  boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
+  borderRadius: 3
+}
+
+const inputSx = {
+  minWidth: 220,
+  backgroundColor: '#fdfdfd',
+  '& fieldset': { borderColor: 'var(--border)' },
+  '&:hover fieldset': { borderColor: 'var(--primary)' },
+  '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
+}
+
+const primaryBtnSx = {
+  backgroundColor: 'var(--primary)',
+  color: '#fff',
+  fontWeight: 700,
+  textTransform: 'none',
+  borderRadius: 2,
+  boxShadow: '0 4px 10px rgba(0,0,0,0.18)',
+  ':hover': { backgroundColor: 'var(--primary-dark)' }
 }
 
 export default function DeviceAttendanceEventsPage() {
@@ -42,21 +75,45 @@ export default function DeviceAttendanceEventsPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'end', marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 2 }}>DeviceCode (optional)</div>
-          <input value={deviceCode} onChange={(e) => setDeviceCode(e.target.value)} placeholder="88" />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 2 }}>From (optional)</div>
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 2 }}>To (optional)</div>
-          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
-        </div>
-        <button onClick={load} disabled={loading}>Refresh</button>
-      </div>
+      <Paper sx={filterCardSx}>
+        <TextField
+          size="small"
+          label="Device Code (optional)"
+          value={deviceCode}
+          onChange={(e) => setDeviceCode(e.target.value)}
+          placeholder="88"
+          sx={inputSx}
+        />
+        <TextField
+          size="small"
+          label="From (optional)"
+          type="date"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+          sx={inputSx}
+        />
+        <TextField
+          size="small"
+          label="To (optional)"
+          type="date"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          InputLabelProps={{ shrink: true }}
+          sx={inputSx}
+        />
+
+        <Box sx={{ flexGrow: 1 }} />
+
+        <Button
+          variant="contained"
+          onClick={load}
+          disabled={loading}
+          sx={primaryBtnSx}
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </Button>
+      </Paper>
 
       <GenericDataTable
         title="Imported Device Logs"
@@ -86,4 +143,3 @@ export default function DeviceAttendanceEventsPage() {
     </div>
   )
 }
-

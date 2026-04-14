@@ -10,7 +10,13 @@ import {
   Chip,
   Stack,
   InputAdornment,
-  IconButton
+  IconButton,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Checkbox,
+  ListItemText
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
@@ -136,7 +142,8 @@ export default function AttendanceReportPage() {
   const [weekAnchor, setWeekAnchor] = React.useState(toDateInputValue(new Date()))
   const [monthAnchor, setMonthAnchor] = React.useState(toDateInputValue(new Date()))
   const [yearAnchor, setYearAnchor] = React.useState(new Date().getFullYear().toString())
-  const [statusFilter, setStatusFilter] = React.useState('all')
+  // Multi-select: empty array means "All"
+  const [statusFilters, setStatusFilters] = React.useState([])
   const [editRow, setEditRow] = React.useState(null)
   const [saving, setSaving] = React.useState(false)
 
@@ -283,16 +290,35 @@ export default function AttendanceReportPage() {
     return { total, late, onTime, early, absent, incomplete, halfDay }
   }, [records])
 
-  const filtered = records.filter((r) => {
-    if (statusFilter === 'all') return true
-    const s = (r.AttendanceSummary || r.Status || '').toLowerCase()
-    if (statusFilter === 'on-time') return s.includes('on-time') || s === 'on time' || s === 'present'
-    if (statusFilter === 'late') return s.includes('late')
-    if (statusFilter === 'early') return s.includes('early')
-    if (statusFilter === 'absent') return s.includes('absent')
-    if (statusFilter === 'incomplete') return s.includes('incomplete')
-    if (statusFilter === 'half-day') return s.includes('half')
+  const statusOptions = React.useMemo(() => ([
+    { value: 'on-time', label: 'On-Time' },
+    { value: 'late', label: 'Late' },
+    { value: 'early', label: 'Early Leave' },
+    { value: 'absent', label: 'Absent' },
+    { value: 'incomplete', label: 'Incomplete' },
+    { value: 'half-day', label: 'Half-Day' },
+    { value: 'holiday', label: 'Holiday' },
+    { value: 'rest-day', label: 'Rest Day' }
+  ]), [])
+
+  const statusMatches = React.useCallback((statusText, filterValue) => {
+    const s = String(statusText || '').toLowerCase()
+    if (filterValue === 'on-time') return s.includes('on-time') || s === 'on time' || s === 'present'
+    if (filterValue === 'late') return s.includes('late')
+    if (filterValue === 'early') return s.includes('early')
+    if (filterValue === 'absent') return s.includes('absent')
+    if (filterValue === 'incomplete') return s.includes('incomplete')
+    if (filterValue === 'half-day') return s.includes('half')
+    if (filterValue === 'holiday') return s.includes('holiday')
+    if (filterValue === 'rest-day') return s.includes('rest day') || s.includes('rest-day')
     return true
+  }, [])
+
+  const filtered = records.filter((r) => {
+    const active = Array.isArray(statusFilters) ? statusFilters.filter(Boolean) : []
+    if (active.length === 0) return true // All
+    const statusText = (r.AttendanceSummary || r.Status || '')
+    return active.some((f) => statusMatches(statusText, f))
   })
 
   return (
@@ -376,16 +402,39 @@ export default function AttendanceReportPage() {
           Reset
         </Button>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-          <label style={{ fontWeight: 600 }}>Status:</label>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={inputStyle}>
-            <option value="all">All</option>
-            <option value="on-time">On-Time</option>
-            <option value="late">Late</option>
-            <option value="early">Early Leave</option>
-            <option value="absent">Absent</option>
-            <option value="incomplete">Incomplete</option>
-            <option value="half-day">Half-Day</option>
-          </select>
+          <FormControl size="small" sx={{ minWidth: 240 }}>
+            <InputLabel id="status-multi">Status</InputLabel>
+            <Select
+              labelId="status-multi"
+              multiple
+              value={statusFilters}
+              label="Status"
+              onChange={(e) => {
+                const value = e.target.value
+                setStatusFilters(Array.isArray(value) ? value : [])
+              }}
+              renderValue={(selected) => {
+                const sel = Array.isArray(selected) ? selected : []
+                if (!sel.length) return 'All'
+                const map = new Map(statusOptions.map(o => [o.value, o.label]))
+                return sel.map(v => map.get(v) || v).join(', ')
+              }}
+              sx={{
+                background: 'var(--surface)',
+                borderRadius: 2,
+                '& fieldset': { borderColor: 'var(--border)' },
+                '&:hover fieldset': { borderColor: 'var(--primary)' },
+                '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
+              }}
+            >
+              {statusOptions.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  <Checkbox checked={statusFilters.indexOf(opt.value) > -1} />
+                  <ListItemText primary={opt.label} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
         </div>
       </div>
 

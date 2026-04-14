@@ -1,13 +1,55 @@
 //SpecialDaysPage.jsx
 import React from 'react'
-import { TableCell } from '@mui/material'
+import { Box, Button, Paper, TableCell, TextField } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import { useSnackbar } from './ui/Snackbar'
+
+const primaryBtnSx = {
+  backgroundColor: 'var(--primary)',
+  color: '#fff',
+  fontWeight: 700,
+  textTransform: 'none',
+  borderRadius: 2,
+  boxShadow: '0 4px 10px rgba(0,0,0,0.18)',
+  ':hover': { backgroundColor: 'var(--primary-dark)' }
+}
+
+const formCardSx = {
+  display: 'flex',
+  gap: 2,
+  rowGap: 1.5,
+  flexWrap: 'wrap',
+  alignItems: 'flex-end',
+  justifyContent: 'space-between',
+  padding: 2,
+  marginBottom: 2,
+  backgroundColor: 'var(--card)',
+  border: '1px solid var(--border)',
+  boxShadow: '0 10px 24px rgba(0,0,0,0.12)',
+  borderRadius: 3
+}
+
+const inputSx = {
+  minWidth: 240,
+  backgroundColor: '#fdfdfd',
+  '& fieldset': { borderColor: 'var(--border)' },
+  '&:hover fieldset': { borderColor: 'var(--primary)' },
+  '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
+}
 
 export default function SpecialDaysPage() {
+  const { show, SnackbarComponent } = useSnackbar()
   const [days, setDays] = React.useState([])
   const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState(null)
+  const [year, setYear] = React.useState(() => String(new Date().getFullYear()))
+  const [generating, setGenerating] = React.useState(false)
+
+  const todayIso = React.useMemo(() => {
+    const d = new Date()
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+    return d.toISOString().slice(0, 10)
+  }, [])
 
   React.useEffect(() => {
     loadDays()
@@ -18,63 +60,94 @@ export default function SpecialDaysPage() {
       setLoading(true)
       const data = await api.fetchSpecialDays()
       setDays(Array.isArray(data) ? data : [])
-      setError(null)
     } catch (err) {
-      setError(err.message)
+      show(`Load failed: ${err.message || err}`, 'error')
     } finally {
       setLoading(false)
     }
   }
 
   const handleAdd = async (form) => {
-    try {
-      const result = await api.createSpecialDay(form)
-      setDays([...days, result])
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    }
+    const result = await api.createSpecialDay(form)
+    setDays([...days, result])
+    show('Special day created.', 'success')
   }
 
   const handleEdit = async (form) => {
-    try {
-      const result = await api.updateSpecialDay(form.SpecialDayID, form)
-      setDays(days.map(d => d.SpecialDayID === form.SpecialDayID ? result : d))
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    }
+    const result = await api.updateSpecialDay(form.SpecialDayID, form)
+    setDays(days.map(d => d.SpecialDayID === form.SpecialDayID ? result : d))
+    show('Special day updated.', 'success')
   }
 
   const handleDelete = async (id) => {
-    try {
-      await api.deleteSpecialDay(id)
-      setDays(days.filter(d => d.SpecialDayID !== id))
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    }
+    await api.deleteSpecialDay(id)
+    setDays(days.filter(d => d.SpecialDayID !== id))
+    show('Special day deleted.', 'success')
   }
 
   return (
-    <GenericDataTable
-      title="Special Days"
-      columns={['SpecialDate', 'DayType', 'Description']}
-      data={days}
-      loading={loading}
-      error={error}
-      primaryKeyField="SpecialDayID"
-      readOnly={true}
-      onAdd={handleAdd}
-      onEdit={handleEdit}
-      onDelete={handleDelete}
-      renderRow={(row) => (
-        <>
-          <TableCell>{row.SpecialDate}</TableCell>
-          <TableCell>{row.DayType}</TableCell>
-          <TableCell>{row.Description}</TableCell>
-        </>
-      )}
-    />
+    <>
+      {SnackbarComponent}
+
+      <Paper sx={formCardSx}>
+        <TextField
+          size="small"
+          label="Year"
+          type="number"
+          value={year}
+          onChange={(e) => setYear(e.target.value)}
+          inputProps={{ min: 2000, max: 2100 }}
+          sx={inputSx}
+          helperText="Generate common PH holidays (you can still add/edit manually)."
+        />
+        <Box sx={{ flexGrow: 1 }} />
+        <Button
+          variant="contained"
+          disabled={generating}
+          onClick={async () => {
+            const y = Number(year)
+            if (!Number.isInteger(y) || y < 2000 || y > 2100) {
+              show('Please enter a valid year (2000–2100).', 'warning')
+              return
+            }
+            setGenerating(true)
+            try {
+              const res = await api.generateSpecialDaysYear(y, false)
+              await loadDays()
+              show(`Generated ${res.inserted} special day(s) for ${y}. Skipped: ${res.skipped}.`, 'success')
+            } catch (err) {
+              show(`Generate failed: ${err.message || err}`, 'error')
+            } finally {
+              setGenerating(false)
+            }
+          }}
+          sx={primaryBtnSx}
+        >
+          {generating ? 'Generating…' : 'Generate Holidays'}
+        </Button>
+      </Paper>
+
+      <GenericDataTable
+        title="Special Days"
+        columns={['SpecialDate', 'DayType', 'Description']}
+        columnSchema={{ SpecialDate: { type: 'date' } }}
+        defaultFormValues={{ SpecialDate: todayIso, DayType: 'HOLIDAY', Description: '' }}
+        data={days}
+        loading={loading}
+        primaryKeyField="SpecialDayID"
+        readOnly={false}
+        showRowDelete={true}
+        onAdd={handleAdd}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+        renderRow={(row) => (
+          <>
+            <TableCell>{row.SpecialDate}</TableCell>
+            <TableCell>{row.DayType}</TableCell>
+            <TableCell>{row.Description}</TableCell>
+          </>
+        )}
+      />
+    </>
   )
 }
