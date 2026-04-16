@@ -9,11 +9,26 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Checkbox,
+  ListItemText,
   Typography,
   TableCell
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+
+const reportStatusOptions = [
+  { value: 'on-time', label: 'On-Time' },
+  { value: 'late', label: 'Late' },
+  { value: 'early-leave', label: 'Early Leave' },
+  { value: 'absent', label: 'Absent' },
+  { value: 'incomplete', label: 'Incomplete' },
+  { value: 'half-day', label: 'Half-Day' },
+  { value: 'holiday', label: 'Holiday' },
+  { value: 'holiday-worked', label: 'Holiday (Worked)' },
+  { value: 'rest-day', label: 'Rest Day' },
+  { value: 'rest-day-worked', label: 'Rest Day (Worked)' }
+]
 
 function toDateInputValue(d) {
   const x = new Date(d)
@@ -135,6 +150,49 @@ function toReportRow(r) {
   }
 }
 
+function statusMatches(statusText, filterValue) {
+  const s = String(statusText || '').toLowerCase()
+  if (filterValue === 'on-time') {
+    return s.includes('on-time') || s.includes('on time') || s === 'present'
+  }
+  if (filterValue === 'late') {
+    return s.includes('late')
+  }
+  if (filterValue === 'early-leave') {
+    return s.includes('early leave') || s.includes('early-out') || s.includes('early out')
+  }
+  if (filterValue === 'absent') {
+    return s.includes('absent')
+  }
+  if (filterValue === 'incomplete') {
+    return s.includes('incomplete')
+  }
+  if (filterValue === 'half-day') {
+    return s.includes('half')
+  }
+  if (filterValue === 'holiday-worked') {
+    return s.includes('holiday') && s.includes('worked')
+  }
+  if (filterValue === 'holiday') {
+    return s === 'holiday'
+  }
+  if (filterValue === 'rest-day-worked') {
+    return (s.includes('rest day') || s.includes('rest-day')) && s.includes('worked')
+  }
+  if (filterValue === 'rest-day') {
+    return s === 'rest day' || s === 'rest-day'
+  }
+  return true
+}
+
+function filterReportRows(reportRows, selectedStatuses) {
+  const active = Array.isArray(selectedStatuses) ? selectedStatuses.filter(Boolean) : []
+  if (!active.length) return Array.isArray(reportRows) ? reportRows : []
+  return (Array.isArray(reportRows) ? reportRows : []).filter((row) =>
+    active.some((status) => statusMatches(row.Status, status))
+  )
+}
+
 function buildHtmlDocument(reportRows, title) {
   const headers = ['Name', 'Shift', 'Date', 'Status', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours']
 
@@ -217,6 +275,7 @@ export default function GenerateReportPage() {
   const [source, setSource] = React.useState('SHIFT')
   const [format, setFormat] = React.useState('EXCEL')
   const [rows, setRows] = React.useState([])
+  const [statusFilters, setStatusFilters] = React.useState([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState(null)
 
@@ -228,6 +287,11 @@ export default function GenerateReportPage() {
     const arr = Array.isArray(data) ? data : []
     return arr.map(toReportRow)
   }
+
+  const previewRows = React.useMemo(
+    () => filterReportRows(rows, statusFilters),
+    [rows, statusFilters]
+  )
 
   const load = async () => {
     setLoading(true)
@@ -263,8 +327,9 @@ export default function GenerateReportPage() {
 
     let reportRows = []
     try {
-      reportRows = await fetchReportRows()
-      setRows(reportRows)
+      const fetchedRows = await fetchReportRows()
+      reportRows = filterReportRows(fetchedRows, statusFilters)
+      setRows(fetchedRows)
     } catch (e) {
       const msg = e?.message || String(e)
       setError(msg)
@@ -303,74 +368,115 @@ export default function GenerateReportPage() {
         }}
       >
         <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>Generate Report</Typography>
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-          <TextField
-            size="small"
-            type="date"
-            label="From"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-          />
-          <TextField
-            size="small"
-            type="date"
-            label="To"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            InputLabelProps={{ shrink: true }}
-          />
-
-          <FormControl size="small" sx={{ minWidth: 200 }}>
-            <InputLabel id="source-label">Data Source</InputLabel>
-            <Select
-              labelId="source-label"
-              label="Data Source"
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-            >
-              <MenuItem value="SHIFT">Shift schedule (recommended)</MenuItem>
-              <MenuItem value="RAW">Raw logs only (no shift needed)</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" sx={{ minWidth: 180 }}>
-            <InputLabel id="format-label">Format</InputLabel>
-            <Select
-              labelId="format-label"
-              label="Format"
-              value={format}
-              onChange={(e) => setFormat(e.target.value)}
-            >
-              <MenuItem value="EXCEL">Excel (.xls)</MenuItem>
-              <MenuItem value="PDF">PDF (Print)</MenuItem>
-            </Select>
-          </FormControl>
-
-          <Box sx={{ flexGrow: 1 }} />
-
-          <Button
-            variant="outlined"
-            onClick={load}
-            disabled={loading}
-            sx={{ textTransform: 'none' }}
-          >
-            {loading ? 'Loading...' : 'Load Preview'}
-          </Button>
-
-          <Button
-            variant="contained"
-            onClick={generate}
-            disabled={loading}
+        <Box sx={{ display: 'grid', gap: 1.5 }}>
+          <Box
             sx={{
-              backgroundColor: 'var(--primary)',
-              fontWeight: 800,
-              textTransform: 'none',
-              ':hover': { backgroundColor: 'var(--primary-dark)' }
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', xl: 'minmax(0, 1fr) auto' },
+              gap: 1.5,
+              alignItems: 'center'
             }}
           >
-            {loading ? 'Generating...' : 'Generate & Download'}
-          </Button>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+              <TextField
+                size="small"
+                type="date"
+                label="From"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+              />
+              <TextField
+                size="small"
+                type="date"
+                label="To"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                InputLabelProps={{ shrink: true }}
+              />
+
+              <FormControl size="small" sx={{ minWidth: 220 }}>
+                <InputLabel id="source-label">Data Source</InputLabel>
+                <Select
+                  labelId="source-label"
+                  label="Data Source"
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                >
+                  <MenuItem value="SHIFT">Shift schedule (recommended)</MenuItem>
+                  <MenuItem value="RAW">Raw logs only (no shift needed)</MenuItem>
+                </Select>
+              </FormControl>
+
+              <FormControl size="small" sx={{ minWidth: 240 }}>
+                <InputLabel id="status-filter-label">Filter</InputLabel>
+                <Select
+                  labelId="status-filter-label"
+                  multiple
+                  value={statusFilters}
+                  label="Filter"
+                  onChange={(e) => {
+                    const value = e.target.value
+                    setStatusFilters(Array.isArray(value) ? value : [])
+                  }}
+                  renderValue={(selected) => {
+                    const active = Array.isArray(selected) ? selected : []
+                    if (!active.length) return 'All statuses'
+                    const labels = new Map(reportStatusOptions.map((option) => [option.value, option.label]))
+                    return active.map((value) => labels.get(value) || value).join(', ')
+                  }}
+                >
+                  {reportStatusOptions.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      <Checkbox checked={statusFilters.indexOf(option.value) > -1} />
+                      <ListItemText primary={option.label} />
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1.5, justifyContent: { xs: 'flex-start', xl: 'flex-end' }, flexWrap: 'wrap' }}>
+              <Button
+                variant="outlined"
+                onClick={load}
+                disabled={loading}
+                sx={{ textTransform: 'none', minWidth: 120 }}
+              >
+                {loading ? 'Loading...' : 'Preview'}
+              </Button>
+
+              <Button
+                variant="contained"
+                onClick={generate}
+                disabled={loading}
+                sx={{
+                  backgroundColor: 'var(--primary)',
+                  fontWeight: 800,
+                  textTransform: 'none',
+                  minWidth: 190,
+                  ':hover': { backgroundColor: 'var(--primary-dark)' }
+                }}
+              >
+                {loading ? 'Generating...' : 'Generate & Download'}
+              </Button>
+            </Box>
+          </Box>
+
+          <Box sx={{ display: 'flex', justifyContent: { xs: 'flex-start', xl: 'flex-end' } }}>
+            <FormControl size="small" sx={{ minWidth: 180 }}>
+              <InputLabel id="format-label">Format</InputLabel>
+              <Select
+                labelId="format-label"
+                label="Format"
+                value={format}
+                onChange={(e) => setFormat(e.target.value)}
+              >
+                <MenuItem value="EXCEL">Excel (.xls)</MenuItem>
+                <MenuItem value="PDF">PDF (Print)</MenuItem>
+              </Select>
+            </FormControl>
+          </Box>
         </Box>
         {error && (
           <Typography variant="body2" sx={{ mt: 1, color: '#b91c1c' }}>
@@ -378,14 +484,17 @@ export default function GenerateReportPage() {
           </Typography>
         )}
         <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'var(--muted)' }}>
+          Leave the status filter empty to include all records. Selected statuses apply to both preview and export.
+        </Typography>
+        <Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'var(--muted)' }}>
           PDF export opens the print dialog (choose “Save as PDF”).
         </Typography>
       </Paper>
 
       <GenericDataTable
-        title={`Preview (${rows.length} rows)`}
+        title={`Preview (${previewRows.length} rows)`}
         columns={['Name', 'Shift', 'Date', 'Status', 'AM In', 'AM Out', 'PM In', 'PM Out', 'Hours']}
-        data={rows}
+        data={previewRows}
         loading={loading}
         error={error}
         primaryKeyField="AttendanceID"

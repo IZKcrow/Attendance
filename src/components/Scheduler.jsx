@@ -59,6 +59,7 @@ export default function Scheduler() {
   const EMPLOYEE_PANEL_LIMIT = 25
   const EMPLOYEE_RENDER_LIMIT = 250
   const MAX_BULK_SELECT = 3000
+  const [showHistory, setShowHistory] = useState(true)
 
   const [employeeQuery, setEmployeeQuery] = useState('')
   const [employeeSort, setEmployeeSort] = useState('code-asc')
@@ -109,7 +110,7 @@ export default function Scheduler() {
     }
     assignmentsTimer.current = setTimeout(async () => {
       try {
-        const existing = await api.fetchEmployeeAssignments({ employeeIDs: ids })
+        const existing = await api.fetchEmployeeAssignmentHistory({ employeeIDs: ids, top: 6 })
         setAssignments(Array.isArray(existing) ? existing : [])
       } catch (_) {
         setAssignments([])
@@ -127,6 +128,27 @@ export default function Scheduler() {
   }, [employees])
 
   const selectedSet = useMemo(() => new Set(selectedEmployeeIDs), [selectedEmployeeIDs])
+  const todayIso = useMemo(() => new Date().toISOString().split('T')[0], [])
+
+  const getHistoryForEmployee = useMemo(() => {
+    const grouped = new Map()
+    for (const a of assignments || []) {
+      const id = a?.EmployeeID
+      if (!id) continue
+      if (!grouped.has(id)) grouped.set(id, [])
+      grouped.get(id).push(a)
+    }
+    // Ensure newest first
+    for (const [id, list] of grouped.entries()) {
+      list.sort((x, y) => {
+        const ax = String(x?.EffectiveFrom || '')
+        const ay = String(y?.EffectiveFrom || '')
+        return ay.localeCompare(ax)
+      })
+      grouped.set(id, list)
+    }
+    return (employeeID) => grouped.get(employeeID) || []
+  }, [assignments])
 
   const employeeLookup = useMemo(() => {
     const map = new Map()
@@ -311,22 +333,6 @@ export default function Scheduler() {
 
   const handleAssign = async () => {
     if (!canSubmit) return
-    if (!forceAssign) {
-      try {
-        const existing = await api.fetchEmployeeAssignments({ employeeIDs: selectedEmployeeIDs })
-        const conflictsFound = existing || []
-        const uniqueConflicts = Array.isArray(conflictsFound)
-          ? Array.from(new Map(conflictsFound.map(c => [c.EmployeeID, c])).values())
-          : []
-        if (uniqueConflicts.length > 0) {
-          setConflicts(uniqueConflicts)
-          setShowConflictDialog(true)
-          return
-        }
-      } catch (_) {
-        show('Could not check existing assignments; proceeding anyway.', 'warning')
-      }
-    }
     setForceAssign(false)
     setSaving(true)
     try {
@@ -396,19 +402,60 @@ export default function Scheduler() {
             </>
           ) : (
             <>
-              <Typography variant="subtitle2" sx={sectionTitleSx}>Selected Employees & Current Shifts</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                <Typography variant="subtitle2" sx={sectionTitleSx}>Selected Employees & Shift Timeline</Typography>
+                <FormControlLabel
+                  control={<Switch checked={showHistory} onChange={(e) => setShowHistory(e.target.checked)} />}
+                  label="Show history"
+                />
+              </Box>
               <Grid container spacing={1}>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">Employee</Typography></Grid>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">Current Shift</Typography></Grid>
                 <Grid item xs={4}><Typography variant="caption" color="text.secondary">Effective</Typography></Grid>
                 {visibleSelectedEmployeeIDs.map((id) => {
                   const emp = employeeMap[id]
-                  const current = assignments.find(a => a.EmployeeID === id)
+                  const history = getHistoryForEmployee(id)
+                  const current =
+                    history.find(a => a?.IsCurrent === 1) ||
+                    history.find(a => {
+                      const from = String(a?.EffectiveFrom || '')
+                      const to = a?.EffectiveTo ? String(a.EffectiveTo) : todayIso
+                      return from && todayIso >= from && todayIso <= to
+                    }) ||
+                    history[0] ||
+                    null
+
+                  const fmtRange = (a) => {
+                    const from = a?.EffectiveFrom ? fmtDate(a.EffectiveFrom) : '-'
+                    const to = a?.EffectiveTo ? fmtDate(a.EffectiveTo) : 'open'
+                    return `${from} → ${to}`
+                  }
+
                   return (
                     <React.Fragment key={id}>
                       <Grid item xs={4}><Typography variant="body2">{emp?.name || emp?.EmployeeCode || id}</Typography></Grid>
                       <Grid item xs={4}><Typography variant="body2">{current?.ShiftName || current?.ShiftID || 'None'}</Typography></Grid>
-                      <Grid item xs={4}><Typography variant="body2">{current?.EffectiveFrom ? `${fmtDate(current.EffectiveFrom)} -> ${current?.EffectiveTo ? fmtDate(current.EffectiveTo) : 'open'}` : '-'}</Typography></Grid>
+                      <Grid item xs={4}><Typography variant="body2">{current ? fmtRange(current) : '-'}</Typography></Grid>
+                      {showHistory && history.length > 1 && (
+                        <Grid item xs={12} sx={{ pt: 0.25, pb: 0.5 }}>
+                          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                            {history.slice(0, 6).map((a, idx) => (
+                              <Chip
+                                key={`${a.EmployeeID}_${a.ShiftID}_${a.EffectiveFrom}_${idx}`}
+                                size="small"
+                                label={`${a.ShiftName || 'Shift'} (${fmtRange(a)})`}
+                                sx={{
+                                  background: a?.IsCurrent === 1 ? 'rgba(0,144,99,0.16)' : 'rgba(148,163,184,0.18)',
+                                  color: 'var(--text)',
+                                  border: `1px solid ${outline}`,
+                                  fontWeight: a?.IsCurrent === 1 ? 800 : 600
+                                }}
+                              />
+                            ))}
+                          </Box>
+                        </Grid>
+                      )}
                     </React.Fragment>
                   )
                 })}

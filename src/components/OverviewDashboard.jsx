@@ -157,9 +157,8 @@ function enrichToday(records, opts = {}) {
       if (hasMorningReq && requireMorningOut && (!hasMorningIn || !hasMorningOut)) incomplete = true
       if (hasAfternoonReq && requireAfternoonOut && (!hasAfternoonIn || !hasAfternoonOut)) incomplete = true
     }
-    if (halfDay) incomplete = true
 
-    const onTime = !absent && hasMorningIn && !late && !earlyLeave && !incomplete
+    const onTime = !absent && hasMorningIn && !late && !earlyLeave && !incomplete && !halfDay
 
     return { ...r, flags: { onTime, late, absent, earlyLeave, incomplete, halfDay } }
   })
@@ -296,16 +295,16 @@ export default function OverviewDashboard({ onOpenAttendance }) {
 
   const computeStats = React.useCallback((records, refNow = new Date()) => {
     const enriched = enrichToday(records, { now: refNow })
-    let onTime = 0, late = 0, absent = 0, earlyLeave = 0, incomplete = 0
+    let onTime = 0, late = 0, absent = 0, halfDay = 0, incomplete = 0
     for (const r of enriched) {
       if (r.flags.absent) absent += 1
+      else if (r.flags.halfDay) halfDay += 1
       else if (r.flags.incomplete) incomplete += 1
       else if (r.flags.late) late += 1
-      else if (r.flags.earlyLeave) earlyLeave += 1
       else onTime += 1
     }
     const totalLogs = enriched.length
-    return { onTime, late, absent, earlyLeave, incomplete, totalLogs }
+    return { onTime, late, absent, halfDay, incomplete, totalLogs }
   }, [])
 
   const stats = React.useMemo(() => computeStats(todayRecords, now), [todayRecords, now, computeStats])
@@ -335,7 +334,7 @@ export default function OverviewDashboard({ onOpenAttendance }) {
     onTime: makeDelta(stats.onTime, yesterdayStats.onTime, 'up'),
     absent: makeDelta(stats.absent, yesterdayStats.absent, 'down'),
     late: makeDelta(stats.late, yesterdayStats.late, 'down'),
-    earlyLeave: makeDelta(stats.earlyLeave, yesterdayStats.earlyLeave, 'down'),
+    halfDay: makeDelta(stats.halfDay, yesterdayStats.halfDay, 'down'),
     incomplete: makeDelta(stats.incomplete, yesterdayStats.incomplete, 'down')
   }
 
@@ -508,7 +507,7 @@ export default function OverviewDashboard({ onOpenAttendance }) {
               <StatCard title="Late Arrival" value={stats.late} accent={accent.warning} icon={<ScheduleOutlinedIcon />} deltaText={deltas.late.text} deltaTone={deltas.late.tone} />
             </Grid>
             <Grid item xs={12} md={4}>
-              <StatCard title="Early Leave" value={stats.earlyLeave} accent={accent.primaryDark} icon={<ExitToAppOutlinedIcon />} deltaText={deltas.earlyLeave.text} deltaTone={deltas.earlyLeave.tone} />
+              <StatCard title="Halfday" value={stats.halfDay} accent={accent.primaryDark} icon={<ExitToAppOutlinedIcon />} deltaText={deltas.halfDay.text} deltaTone={deltas.halfDay.tone} />
             </Grid>
             <Grid item xs={12} md={4}>
               <StatCard title="Incomplete" value={stats.incomplete} accent={accent.muted} icon={<ReportGmailerrorredOutlinedIcon />} deltaText={deltas.incomplete.text} deltaTone={deltas.incomplete.tone} />
@@ -639,9 +638,6 @@ export default function OverviewDashboard({ onOpenAttendance }) {
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
             Recent Logs (Today)
-          </Typography>
-          <Typography variant="caption" sx={{ color: accent.primary, fontWeight: 700 }}>
-            ● Live Updates
           </Typography>
         </Box>
         {loadingDept ? (

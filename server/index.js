@@ -1899,6 +1899,7 @@ app.post('/shift-assignments/bulk', async (req, res) => {
     if (!effFrom) return res.status(400).json({ error: 'effectiveFrom is required' })
     if (Number.isNaN(effFrom.getTime())) return res.status(400).json({ error: 'Invalid effectiveFrom date' })
     if (effTo && Number.isNaN(effTo.getTime())) return res.status(400).json({ error: 'Invalid effectiveTo date' })
+    if (effTo && effTo.getTime() < effFrom.getTime()) return res.status(400).json({ error: 'effectiveTo must be on/after effectiveFrom' })
 
     const empCsv = targetEmployeeIDs.join(',')
     request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
@@ -1922,25 +1923,87 @@ app.post('/shift-assignments/bulk', async (req, res) => {
         RAISERROR('Invalid employeeIDs', 16, 1);
       END
 
-      DECLARE @EffFrom DATE = TRY_CONVERT(DATE, @EffectiveFrom);
-      DECLARE @EffTo   DATE = TRY_CONVERT(DATE, @EffectiveTo);
-      IF @EffFrom IS NULL BEGIN RAISERROR('Invalid effectiveFrom date', 16, 1); END
-      IF (@HasEffectiveTo = 1 AND @EffTo IS NULL) BEGIN RAISERROR('Invalid effectiveTo date', 16, 1); END
+      DECLARE @EffFrom DATE = @EffectiveFrom;
+      DECLARE @EffTo   DATE = @EffectiveTo;
+      DECLARE @NewEnd  DATE = CASE WHEN @HasEffectiveTo = 1 THEN @EffTo ELSE '9999-12-31' END;
 
-      -- hard replace: remove all existing assignments for these employees
+      DECLARE @InsertedSplit INT = 0;
+      DECLARE @UpdatedLeft INT = 0;
+      DECLARE @UpdatedRight INT = 0;
+      DECLARE @DeletedCovered INT = 0;
+      DECLARE @DeletedInvalid INT = 0;
+      DECLARE @InsertedNew INT = 0;
+
+      -- If an existing assignment fully spans the new range, split it into left and right parts.
+      -- (Right part only exists if EffectiveTo was provided.)
+      IF @HasEffectiveTo = 1
+      BEGIN
+        INSERT INTO dbo.EmployeeShiftAllotments (AllotmentID, EmployeeID, ShiftID, EffectiveFrom, EffectiveTo)
+        SELECT NEWID(), A.EmployeeID, A.ShiftID, DATEADD(DAY, 1, @EffTo), A.EffectiveTo
+        FROM dbo.EmployeeShiftAllotments A
+        INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+        WHERE A.EffectiveFrom < @EffFrom
+          AND ISNULL(A.EffectiveTo, '9999-12-31') > @EffTo;
+        SET @InsertedSplit = @@ROWCOUNT;
+      END
+
+      -- Shorten any existing assignment that overlaps the new range on the left side.
+      UPDATE A
+      SET EffectiveTo = DATEADD(DAY, -1, @EffFrom)
+      FROM dbo.EmployeeShiftAllotments A
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+      WHERE A.EffectiveFrom < @EffFrom
+        AND ISNULL(A.EffectiveTo, '9999-12-31') >= @EffFrom;
+      SET @UpdatedLeft = @@ROWCOUNT;
+
+      -- Move forward any existing assignment that overlaps the new range on the right side.
+      IF @HasEffectiveTo = 1
+      BEGIN
+        UPDATE A
+        SET EffectiveFrom = DATEADD(DAY, 1, @EffTo)
+        FROM dbo.EmployeeShiftAllotments A
+        INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+        WHERE A.EffectiveFrom >= @EffFrom
+          AND A.EffectiveFrom <= @EffTo
+          AND ISNULL(A.EffectiveTo, '9999-12-31') > @EffTo;
+        SET @UpdatedRight = @@ROWCOUNT;
+      END
+
+      -- Delete any existing assignments fully covered by the new range.
       DELETE A
       FROM dbo.EmployeeShiftAllotments A
-      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID;
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+      WHERE A.EffectiveFrom >= @EffFrom
+        AND ISNULL(A.EffectiveTo, '9999-12-31') <= @NewEnd;
+      SET @DeletedCovered = @@ROWCOUNT;
 
-      -- insert new assignments (one per employee)
+      -- Cleanup: remove any invalid ranges created by updates (EffectiveTo < EffectiveFrom).
+      DELETE A
+      FROM dbo.EmployeeShiftAllotments A
+      INNER JOIN @Emp E ON A.EmployeeID = E.EmployeeID
+      WHERE A.EffectiveTo IS NOT NULL
+        AND A.EffectiveTo < A.EffectiveFrom;
+      SET @DeletedInvalid = @@ROWCOUNT;
+
+      -- Insert the new assignment period.
       INSERT INTO dbo.EmployeeShiftAllotments (AllotmentID, EmployeeID, ShiftID, EffectiveFrom, EffectiveTo)
-      SELECT NEWID(), E.EmployeeID, @ShiftID, @EffFrom, CASE WHEN @HasEffectiveTo=1 THEN @EffTo ELSE NULL END
+      SELECT NEWID(), E.EmployeeID, @ShiftID, @EffFrom, CASE WHEN @HasEffectiveTo = 1 THEN @EffTo ELSE NULL END
       FROM @Emp E;
+      SET @InsertedNew = @@ROWCOUNT;
+
+      SELECT
+        (SELECT COUNT(1) FROM @Emp) AS Employees,
+        @InsertedNew AS InsertedNew,
+        @InsertedSplit AS InsertedSplit,
+        @UpdatedLeft AS UpdatedLeft,
+        @UpdatedRight AS UpdatedRight,
+        @DeletedCovered AS DeletedCovered,
+        @DeletedInvalid AS DeletedInvalid;
     `)
 
     await transaction.commit()
-    const assigned = result?.rowsAffected?.[result.rowsAffected.length - 1] || 0
-    res.json({ success: true, assigned, shiftID })
+    const summary = result?.recordset?.[0] || {}
+    res.json({ success: true, shiftID, summary })
   } catch (err) {
     console.error('shift assignment failed', err)
     try { if (transaction) await transaction.rollback() } catch (_) {}
@@ -2064,6 +2127,61 @@ app.post('/shift-assignments/list', async (req, res) => {
     res.json(result.recordset || [])
   } catch (err) {
     console.error('list assignments failed', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// Full assignment history (for UI verification / timeline view).
+// Returns the most recent N assignments per employee (including past-ended ones).
+app.post('/shift-assignments/history', requireAdmin, async (req, res) => {
+  const { employeeIDs = [], top = 5 } = req.body || {}
+  if (!Array.isArray(employeeIDs) || employeeIDs.length === 0) {
+    return res.status(400).json({ error: 'employeeIDs array is required' })
+  }
+  const topN = Number.isFinite(Number(top)) ? Math.max(1, Math.min(50, Number(top))) : 5
+  try {
+    const pool = await getPool()
+    const empCsv = employeeIDs.filter(Boolean).join(',')
+    const request = pool.request()
+    request.input('EmpCSV', sql.NVarChar(sql.MAX), empCsv)
+    request.input('TopN', sql.Int, topN)
+    const result = await request.query(`
+      DECLARE @Emp TABLE (EmployeeID NVARCHAR(36));
+      ;WITH EmpSplit AS (
+        SELECT LTRIM(RTRIM(m.n.value('.','nvarchar(100)'))) AS value
+        FROM (SELECT CAST('<i>' + REPLACE(@EmpCSV, ',', '</i><i>') + '</i>' AS XML) AS x) t
+        CROSS APPLY x.nodes('/i') m(n)
+      )
+      INSERT INTO @Emp(EmployeeID)
+      SELECT value FROM EmpSplit WHERE value <> '';
+
+      DECLARE @today DATE = CAST(GETDATE() AS DATE);
+
+      ;WITH Pick AS (
+        SELECT
+          A.EmployeeID,
+          A.ShiftID,
+          A.EffectiveFrom,
+          A.EffectiveTo,
+          SD.ShiftName,
+          SD.MorningTimeIn,
+          SD.MorningTimeOut,
+          SD.AfternoonTimeIn,
+          SD.AfternoonTimeOut,
+          CASE WHEN @today BETWEEN A.EffectiveFrom AND ISNULL(A.EffectiveTo, @today) THEN 1 ELSE 0 END AS IsCurrent,
+          ROW_NUMBER() OVER (PARTITION BY A.EmployeeID ORDER BY A.EffectiveFrom DESC) AS rn
+        FROM dbo.EmployeeShiftAllotments A
+        LEFT JOIN dbo.ShiftDefinitions SD ON A.ShiftID = SD.ShiftID
+        WHERE A.EmployeeID IN (SELECT EmployeeID FROM @Emp)
+      )
+      SELECT *
+      FROM Pick
+      WHERE rn <= @TopN
+      ORDER BY EmployeeID, EffectiveFrom DESC;
+    `)
+    res.json(result.recordset || [])
+  } catch (err) {
+    console.error('assignment history failed', err)
     res.status(500).json({ error: err.message })
   }
 })

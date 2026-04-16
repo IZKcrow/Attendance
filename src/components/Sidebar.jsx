@@ -32,7 +32,6 @@ const SCHEDULE_GROUP = [
 const ATTENDANCE_GROUP = [
   { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
   { id: 'attendance-report', label: 'Attendance Report', icon: AssignmentIcon },
-  { id: 'device-attendance-events', label: 'Imported Logs', icon: HistoryIcon },
   { id: 'reports', label: 'Generate Report', icon: AssignmentIcon }
 ]
 
@@ -40,6 +39,8 @@ const OTHER_ITEMS = [
   { id: 'special-days', label: 'Special Days', icon: LogoutIcon },
   { id: 'audit-logs', label: 'Logs', icon: HistoryIcon }
 ]
+
+const IMPORT_LOGS_ITEM = { id: 'device-attendance-events', label: 'Import Logs', icon: HistoryIcon }
 
 export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, onLogout }) {
   const [openSchedule, setOpenSchedule] = React.useState(false)
@@ -220,6 +221,24 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
             </ListItemButton>
           </ListItem>
         ))}
+
+        <ListItem disablePadding>
+          <ListItemButton
+            onClick={() => onMenuClick(IMPORT_LOGS_ITEM.id)}
+            selected={activeMenu === IMPORT_LOGS_ITEM.id}
+            sx={topLevelButtonSx}
+          >
+            <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 40 : 'auto' }}>
+              <IMPORT_LOGS_ITEM.icon />
+            </ListItemIcon>
+            {expanded && (
+              <ListItemText
+                primary={IMPORT_LOGS_ITEM.label}
+                primaryTypographyProps={{ color: textColor, fontWeight: 600 }}
+              />
+            )}
+          </ListItemButton>
+        </ListItem>
 
         {/* Logout */}
         <ListItem disablePadding>

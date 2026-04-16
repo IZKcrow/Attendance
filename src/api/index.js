@@ -627,6 +627,15 @@ export async function fetchEmployeeAssignments({ employeeIDs = [] }) {
   return handleRes(res)
 }
 
+export async function fetchEmployeeAssignmentHistory({ employeeIDs = [], top = 5 } = {}) {
+  const res = await fetch(`${BASE}/shift-assignments/history`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ employeeIDs, top })
+  })
+  return handleRes(res)
+}
+
 export async function removeShiftAssignments({
   shiftID,
   employeeIDs = [],
