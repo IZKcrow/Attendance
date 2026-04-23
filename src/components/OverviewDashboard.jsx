@@ -535,7 +535,7 @@ export default function OverviewDashboard({ onOpenAttendance }) {
                         backgroundColor: 'rgba(0,144,99,0.18)',
                         tension: 0.4,
                         fill: false,
-                        pointRadius: 3
+                        pointRadius: 4
                       },
                       {
                         label: 'Late %',
@@ -544,7 +544,7 @@ export default function OverviewDashboard({ onOpenAttendance }) {
                         backgroundColor: 'rgba(180,83,9,0.18)',
                         tension: 0.35,
                         fill: false,
-                        pointRadius: 2
+                        pointRadius: 4
                       },
                       {
                         label: 'Absent %',
@@ -553,7 +553,7 @@ export default function OverviewDashboard({ onOpenAttendance }) {
                         backgroundColor: 'rgba(185,28,28,0.18)',
                         tension: 0.35,
                         fill: false,
-                        pointRadius: 2
+                        pointRadius: 4
                       }
                     ]
                   }}
@@ -878,25 +878,12 @@ function pickLogType(r) {
 }
 
 function getRecentRowSx(rawStatus) {
-  const s = String(rawStatus || '').toLowerCase()
-  if (s.includes('absent')) return { backgroundColor: 'rgba(185,28,28,0.08)' }
-  if (s.includes('late')) return { backgroundColor: 'rgba(180,83,9,0.08)' }
-  if (s.includes('on time')) return { backgroundColor: 'rgba(0,144,99,0.06)' }
-  if (s.includes('incomplete') || s.includes('half')) return { backgroundColor: 'rgba(107,114,128,0.08)' }
-  return {}
+  const colors = getStatusVisuals(rawStatus)
+  return colors.rowBg ? { backgroundColor: colors.rowBg } : {}
 }
 
 function renderStatusChip(raw, palette) {
-  const s = (raw || '').toLowerCase()
-  const colors = s.includes('late')
-    ? { bg: 'rgba(217,119,6,0.14)', fg: '#b45309' }
-    : s.includes('absent')
-      ? { bg: 'rgba(185,28,28,0.14)', fg: '#991b1b' }
-      : s.includes('early')
-        ? { bg: 'rgba(0,144,99,0.12)', fg: palette.primaryDark || '#006b4b' }
-        : (s.includes('incomplete') || s.includes('half'))
-          ? { bg: 'rgba(148,163,184,0.18)', fg: palette.muted || '#6b7280' }
-          : { bg: 'rgba(0,144,99,0.18)', fg: palette.primary || '#009063' }
+  const colors = getStatusVisuals(raw, palette)
   return (
     <Chip
       label={raw || '-'}
@@ -905,8 +892,65 @@ function renderStatusChip(raw, palette) {
         backgroundColor: colors.bg,
         color: colors.fg,
         fontWeight: 700,
+        border: `1px solid ${colors.border}`,
         textTransform: 'capitalize'
       }}
     />
   )
+}
+
+function getStatusVisuals(rawStatus, palette = accent) {
+  const s = String(rawStatus || '').toLowerCase()
+
+  if (s.includes('absent')) {
+    return {
+      bg: getCssVar('--status-absent-bg', '#fee2e2'),
+      fg: getCssVar('--status-absent-fg', '#b91c1c'),
+      border: getCssVar('--status-absent-border', '#fca5a5'),
+      rowBg: getCssVar('--status-absent-row', 'rgba(239, 68, 68, 0.18)')
+    }
+  }
+
+  if (s.includes('late')) {
+    return {
+      bg: getCssVar('--status-late-bg', '#ffedd5'),
+      fg: getCssVar('--status-late-fg', '#c2410c'),
+      border: getCssVar('--status-late-border', '#fdba74'),
+      rowBg: getCssVar('--status-late-row', 'rgba(249, 115, 22, 0.16)')
+    }
+  }
+
+  if (s.includes('incomplete')) {
+    return {
+      bg: getCssVar('--status-incomplete-bg', '#e5e7eb'),
+      fg: getCssVar('--status-incomplete-fg', '#4b5563'),
+      border: getCssVar('--status-incomplete-border', '#cbd5e1'),
+      rowBg: getCssVar('--status-incomplete-row', 'rgba(107, 114, 128, 0.18)')
+    }
+  }
+
+  if (s.includes('half')) {
+    return {
+      bg: getCssVar('--status-halfday-bg', '#dbeafe'),
+      fg: getCssVar('--status-halfday-fg', '#1d4ed8'),
+      border: getCssVar('--status-halfday-border', '#93c5fd'),
+      rowBg: getCssVar('--status-halfday-row', 'rgba(59, 130, 246, 0.14)')
+    }
+  }
+
+  if (s.includes('early')) {
+    return {
+      bg: getCssVar('--status-early-bg', '#dcfce7'),
+      fg: getCssVar('--status-early-fg', palette.primaryDark || '#166534'),
+      border: getCssVar('--status-early-border', '#86efac'),
+      rowBg: getCssVar('--status-early-row', 'rgba(34, 197, 94, 0.14)')
+    }
+  }
+
+  return {
+    bg: getCssVar('--status-on-time-bg', '#dcfce7'),
+    fg: getCssVar('--status-on-time-fg', palette.primary || '#15803d'),
+    border: getCssVar('--status-on-time-border', '#86efac'),
+    rowBg: getCssVar('--status-on-time-row', 'rgba(34, 197, 94, 0.14)')
+  }
 }

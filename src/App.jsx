@@ -1,9 +1,9 @@
-﻿import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import { CssBaseline } from '@mui/material'
 import Dashboard from './components/Dashboard'
+import ForgotPasswordPage from './components/ForgotPasswordPage'
 import LoginPage from './components/LoginPage'
 import RegisterAdminPage from './components/RegisterAdminPage'
-import ForgotPasswordPage from './components/ForgotPasswordPage'
 import ResetPasswordPage from './components/ResetPasswordPage'
 
 const LOGIN_PATH = '/login'
@@ -43,11 +43,6 @@ export default function App() {
     navigate(DASHBOARD_PATH)
   }
 
-  const handleRegisterSuccess = (data) => {
-    setToken(data?.token || localStorage.getItem('authToken'))
-    navigate(DASHBOARD_PATH)
-  }
-
   const handleLogout = () => {
     localStorage.removeItem('authToken')
     setToken(null)
@@ -55,6 +50,12 @@ export default function App() {
   }
 
   const isAuthed = useMemo(() => Boolean(token), [token])
+  const isPublicAuthPath = useMemo(() => (
+    path === LOGIN_PATH
+    || path === REGISTER_ADMIN_PATH
+    || path === FORGOT_PASSWORD_PATH
+    || path === RESET_PASSWORD_PATH
+  ), [path])
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return
@@ -77,41 +78,24 @@ export default function App() {
     }
 
     if (isAuthed) {
-      if (
-        path === '/' ||
-        path === LOGIN_PATH ||
-        path === REGISTER_ADMIN_PATH ||
-        path === FORGOT_PASSWORD_PATH ||
-        path === RESET_PASSWORD_PATH
-      ) {
+      if (path === '/') {
         navigate(DASHBOARD_PATH)
       }
-    } else {
-      if (
-        path !== LOGIN_PATH &&
-        path !== REGISTER_ADMIN_PATH &&
-        path !== FORGOT_PASSWORD_PATH &&
-        path !== RESET_PASSWORD_PATH
-      ) {
-        navigate(LOGIN_PATH)
-      }
+    } else if (path === '/') {
+      navigate(LOGIN_PATH)
+    } else if (!isPublicAuthPath) {
+      navigate(LOGIN_PATH)
     }
-  }, [isAuthed, path])
+  }, [isAuthed, isPublicAuthPath, path])
 
   return (
     <>
       <CssBaseline />
-      {isAuthed ? (
-        <Dashboard onLogout={handleLogout} />
-      ) : path === REGISTER_ADMIN_PATH ? (
-        <RegisterAdminPage onSuccess={handleRegisterSuccess} />
-      ) : path === FORGOT_PASSWORD_PATH ? (
-        <ForgotPasswordPage />
-      ) : path === RESET_PASSWORD_PATH ? (
-        <ResetPasswordPage onSuccess={handleRegisterSuccess} />
-      ) : (
-        <LoginPage onSuccess={handleLoginSuccess} />
-      )}
+      {path === REGISTER_ADMIN_PATH ? <RegisterAdminPage onSuccess={handleLoginSuccess} />
+        : path === FORGOT_PASSWORD_PATH ? <ForgotPasswordPage />
+          : path === RESET_PASSWORD_PATH ? <ResetPasswordPage onSuccess={handleLoginSuccess} />
+            : isAuthed ? <Dashboard onLogout={handleLogout} />
+              : <LoginPage onSuccess={handleLoginSuccess} />}
     </>
   )
 }

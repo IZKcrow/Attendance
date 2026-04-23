@@ -3,10 +3,53 @@ const cors = require('cors')
 const bodyParser = require('body-parser')
 const sql = require('mssql')
 const crypto = require('crypto')
+const fs = require('fs')
+const path = require('path')
+const https = require('https')
+
+function parseEnvValue(rawValue) {
+  let value = String(rawValue || '').trim()
+  if (!value) return ''
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1)
+  }
+  return value.replace(/\\n/g, '\n')
+}
+
+function loadEnvFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return
+    const text = fs.readFileSync(filePath, 'utf8')
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) continue
+      const match = line.match(/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/)
+      if (!match) continue
+      const [, key, rawValue] = match
+      if (process.env[key] == null) {
+        process.env[key] = parseEnvValue(rawValue)
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load .env file:', err.message)
+  }
+}
+
+function normalizeBaseUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  return raw.replace(/\/+$/, '')
+}
+
+loadEnvFile(path.join(__dirname, '..', '.env'))
 
 const app = express()
 const PORT = process.env.PORT || 4000
 const BRIDGE_TOKEN = process.env.BRIDGE_TOKEN || 'dev-bridge-token'
+const APP_BASE_URL = normalizeBaseUrl(process.env.APP_BASE_URL || '')
+const MAILERSEND_API_KEY = String(process.env.MAILERSEND_API_KEY || process.env.RESEND_API_KEY || '').trim()
+const MAILERSEND_FROM_EMAIL = String(process.env.MAILERSEND_FROM_EMAIL || process.env.RESEND_FROM_EMAIL || '').trim()
+const MAILERSEND_FROM_NAME = String(process.env.MAILERSEND_FROM_NAME || process.env.RESEND_FROM_NAME || 'Attendance System').trim() || 'Attendance System'
 
 app.use(cors())
 app.use(bodyParser.json({ limit: '10mb' }))
@@ -44,6 +87,198 @@ console.log('DB config:', {
 })
 
 let poolPromise = null
+
+function isMailerSendConfigured() {
+  return Boolean(MAILERSEND_API_KEY && MAILERSEND_FROM_EMAIL)
+}
+
+function getAppBaseUrl(req) {
+  if (APP_BASE_URL) return APP_BASE_URL
+
+  const originHeader = normalizeBaseUrl(req?.headers?.origin)
+  if (originHeader) return originHeader
+
+  const forwardedProto = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim()
+  const forwardedHost = String(req?.headers?.['x-forwarded-host'] || '').split(',')[0].trim()
+  const host = forwardedHost || String(req?.headers?.host || '').split(',')[0].trim()
+  const protocol = forwardedProto || req?.protocol || 'http'
+
+  return host ? `${protocol}://${host}` : 'http://localhost:5173'
+}
+
+function buildAppUrl(req, routePath) {
+  const rawPath = String(routePath || '')
+  const cleanPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`
+  return `${getAppBaseUrl(req)}${cleanPath}`
+}
+
+function formatFromAddress() {
+  if (!MAILERSEND_FROM_EMAIL) return ''
+  return MAILERSEND_FROM_NAME ? `${MAILERSEND_FROM_NAME} <${MAILERSEND_FROM_EMAIL}>` : MAILERSEND_FROM_EMAIL
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function buildEmailShell({ preheader, title, intro, actionLabel, actionUrl, footer }) {
+  const safeActionUrl = escapeHtml(actionUrl)
+  return `
+    <div style="background:#f4f7fb;padding:32px 16px;font-family:Arial,sans-serif;color:#122033;">
+      <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:18px;padding:32px;border:1px solid #dde7f3;box-shadow:0 12px 40px rgba(15,38,72,0.08);">
+        <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+          ${escapeHtml(preheader)}
+        </div>
+        <p style="margin:0 0 12px;color:#46617f;font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">
+          Attendance Admin
+        </p>
+        <h1 style="margin:0 0 14px;font-size:28px;line-height:1.2;color:#10233f;">${escapeHtml(title)}</h1>
+        <p style="margin:0 0 24px;font-size:15px;line-height:1.65;color:#304968;">${intro}</p>
+        <p style="margin:0 0 28px;">
+          <a href="${safeActionUrl}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:#0f62fe;color:#ffffff;text-decoration:none;font-weight:700;">
+            ${escapeHtml(actionLabel)}
+          </a>
+        </p>
+        <p style="margin:0 0 12px;font-size:13px;line-height:1.6;color:#5e748d;">
+          If the button does not work, open this link:
+        </p>
+        <p style="margin:0 0 24px;font-size:13px;line-height:1.6;word-break:break-all;">
+          <a href="${safeActionUrl}" style="color:#0f62fe;text-decoration:none;">${safeActionUrl}</a>
+        </p>
+        <p style="margin:0;font-size:12px;line-height:1.6;color:#70839a;">${footer}</p>
+      </div>
+    </div>
+  `
+}
+
+function buildAdminInvitationEmail({ registerUrl, inviteEmail, expiresHours, invitedBy }) {
+  const invitedText = invitedBy
+    ? `${escapeHtml(invitedBy)} invited ${inviteEmail ? escapeHtml(inviteEmail) : 'you'} to join the Attendance admin portal.`
+    : `${inviteEmail ? escapeHtml(inviteEmail) : 'You'} were invited to join the Attendance admin portal.`
+  const footer = `This invitation expires in ${expiresHours} hour${expiresHours === 1 ? '' : 's'}. If you were not expecting this email, you can ignore it.`
+
+  return {
+    subject: 'Attendance admin invitation',
+    html: buildEmailShell({
+      preheader: 'Your admin invitation is ready.',
+      title: 'Create your admin account',
+      intro: `${invitedText}<br /><br />Use the button below to finish your registration and set your password.`,
+      actionLabel: 'Accept Invitation',
+      actionUrl: registerUrl,
+      footer
+    }),
+    text: [
+      invitedBy ? `${invitedBy} invited ${inviteEmail || 'you'} to join the Attendance admin portal.` : `${inviteEmail || 'You'} were invited to join the Attendance admin portal.`,
+      '',
+      `Open this link to create your admin account: ${registerUrl}`,
+      '',
+      footer
+    ].join('\n')
+  }
+}
+
+function buildPasswordResetEmail({ email, resetUrl, expiresHours }) {
+  const footer = `This reset link expires in ${expiresHours} hour${expiresHours === 1 ? '' : 's'}. If you did not request a password reset, you can safely ignore this email.`
+
+  return {
+    subject: 'Reset your Attendance admin password',
+    html: buildEmailShell({
+      preheader: 'Use this link to reset your admin password.',
+      title: 'Reset your password',
+      intro: `A password reset was requested for <strong>${escapeHtml(email)}</strong>.<br /><br />Use the button below to choose a new password.`,
+      actionLabel: 'Reset Password',
+      actionUrl: resetUrl,
+      footer
+    }),
+    text: [
+      `A password reset was requested for ${email}.`,
+      '',
+      `Open this link to reset your password: ${resetUrl}`,
+      '',
+      footer
+    ].join('\n')
+  }
+}
+
+function sendTransactionalEmail({ to, subject, html, text }) {
+  if (!isMailerSendConfigured()) {
+    return Promise.resolve({
+      sent: false,
+      skipped: true,
+      reason: 'MailerSend is not configured.'
+    })
+  }
+
+  const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
+  if (!recipients.length) {
+    return Promise.resolve({
+      sent: false,
+      skipped: true,
+      reason: 'No recipient provided.'
+    })
+  }
+
+  const payload = JSON.stringify({
+    from: {
+      email: MAILERSEND_FROM_EMAIL,
+      name: MAILERSEND_FROM_NAME
+    },
+    to: recipients.map((email) => ({ email })),
+    subject,
+    html,
+    text
+  })
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.mailersend.com',
+        path: '/v1/email',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${MAILERSEND_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload)
+        }
+      },
+      (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk) => { body += chunk })
+        res.on('end', () => {
+          let parsedBody = null
+          try {
+            parsedBody = body ? JSON.parse(body) : null
+          } catch (_) {}
+
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            return resolve({
+              sent: true,
+              id: res.headers['x-message-id'] || parsedBody?.id || null,
+              provider: 'mailersend'
+            })
+          }
+
+          const errorMessage = parsedBody?.message
+            || parsedBody?.error
+            || (parsedBody?.errors && typeof parsedBody.errors === 'object' && Object.values(parsedBody.errors).flat().map((entry) => String(entry)).join('; '))
+            || `MailerSend request failed with status ${res.statusCode}`
+
+          reject(new Error(errorMessage))
+        })
+      }
+    )
+
+    req.on('error', reject)
+    req.write(payload)
+    req.end()
+  })
+}
 
 function parseTimeString(value) {
   if (value == null) return null
@@ -263,6 +498,29 @@ function resolveAuditActor(req, fallback) {
   } catch (_) {}
   const fb = String(fallback || '').trim()
   return fb || 'SYSTEM'
+}
+
+function getEmployeeSaveErrorMessage(err) {
+  const msg = String(err?.message || err || '')
+  const lower = msg.toLowerCase()
+
+  if (!lower.includes('cannot insert duplicate key') && !lower.includes('unique')) {
+    return null
+  }
+
+  if (msg.includes('UQ_Employees_BiometricStaffCode') || msg.includes('BiometricStaffCode')) {
+    return 'Biometric Staff Code is already assigned to another employee.'
+  }
+
+  if (msg.includes('UQ_Employees_BiometricUserID') || msg.includes('BiometricUserID')) {
+    return 'Biometric User ID is already assigned to another employee.'
+  }
+
+  if (msg.includes('EmployeeCode')) {
+    return 'Employee code already exists.'
+  }
+
+  return 'Employee record already exists.'
 }
 
 async function initDbIfNeeded(pool) {
@@ -606,6 +864,64 @@ BEGIN
   END
 END`,
 
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AdminOvertimeEntries' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AdminOvertimeEntries (
+    OvertimeEntryID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NOT NULL,
+    OvertimeDate DATE NOT NULL,
+    StartTime TIME(7) NULL,
+    EndTime TIME(7) NULL,
+    ApprovedMinutes INT NULL,
+    OvertimeType NVARCHAR(50) NOT NULL DEFAULT 'REGULAR',
+    Reason NVARCHAR(255) NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'APPROVED',
+    CreatedByUserID NVARCHAR(36) NULL,
+    UpdatedByUserID NVARCHAR(36) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID)
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminOvertimeEntries_Date' AND object_id = OBJECT_ID('dbo.AdminOvertimeEntries'))
+  BEGIN
+    CREATE INDEX IX_AdminOvertimeEntries_Date ON dbo.AdminOvertimeEntries(OvertimeDate, EmployeeID)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminOvertimeEntries_EmployeeDate' AND object_id = OBJECT_ID('dbo.AdminOvertimeEntries'))
+  BEGIN
+    CREATE INDEX IX_AdminOvertimeEntries_EmployeeDate ON dbo.AdminOvertimeEntries(EmployeeID, OvertimeDate)
+  END
+END`,
+
+    `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AdminLeaveEntries' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AdminLeaveEntries (
+    LeaveEntryID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NOT NULL,
+    LeaveStartDate DATE NOT NULL,
+    LeaveEndDate DATE NOT NULL,
+    LeaveType NVARCHAR(50) NOT NULL DEFAULT 'LEAVE',
+    LeaveUnitType NVARCHAR(30) NOT NULL DEFAULT 'FULL_DAY',
+    StartTime TIME(7) NULL,
+    EndTime TIME(7) NULL,
+    ApprovedMinutes INT NULL,
+    Reason NVARCHAR(255) NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'APPROVED',
+    CreatedByUserID NVARCHAR(36) NULL,
+    UpdatedByUserID NVARCHAR(36) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID)
+  );
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminLeaveEntries_DateRange' AND object_id = OBJECT_ID('dbo.AdminLeaveEntries'))
+  BEGIN
+    CREATE INDEX IX_AdminLeaveEntries_DateRange ON dbo.AdminLeaveEntries(LeaveStartDate, LeaveEndDate, EmployeeID)
+  END
+  IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminLeaveEntries_EmployeeDateRange' AND object_id = OBJECT_ID('dbo.AdminLeaveEntries'))
+  BEGIN
+    CREATE INDEX IX_AdminLeaveEntries_EmployeeDateRange ON dbo.AdminLeaveEntries(EmployeeID, LeaveStartDate, LeaveEndDate)
+  END
+END`,
+
     `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'DeviceSyncJobs' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.DeviceSyncJobs (
@@ -800,6 +1116,62 @@ BEGIN
   CREATE INDEX IX_SpecialDays_Date ON dbo.SpecialDays(SpecialDate)
 END`
     ,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AdminOvertimeEntries' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AdminOvertimeEntries (
+    OvertimeEntryID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NOT NULL,
+    OvertimeDate DATE NOT NULL,
+    StartTime TIME(7) NULL,
+    EndTime TIME(7) NULL,
+    ApprovedMinutes INT NULL,
+    OvertimeType NVARCHAR(50) NOT NULL DEFAULT 'REGULAR',
+    Reason NVARCHAR(255) NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'APPROVED',
+    CreatedByUserID NVARCHAR(36) NULL,
+    UpdatedByUserID NVARCHAR(36) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID)
+  )
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminOvertimeEntries_Date' AND object_id = OBJECT_ID('dbo.AdminOvertimeEntries'))
+BEGIN
+  CREATE INDEX IX_AdminOvertimeEntries_Date ON dbo.AdminOvertimeEntries(OvertimeDate, EmployeeID)
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminOvertimeEntries_EmployeeDate' AND object_id = OBJECT_ID('dbo.AdminOvertimeEntries'))
+BEGIN
+  CREATE INDEX IX_AdminOvertimeEntries_EmployeeDate ON dbo.AdminOvertimeEntries(EmployeeID, OvertimeDate)
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AdminLeaveEntries' AND schema_id = SCHEMA_ID('dbo'))
+BEGIN
+  CREATE TABLE dbo.AdminLeaveEntries (
+    LeaveEntryID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    EmployeeID UNIQUEIDENTIFIER NOT NULL,
+    LeaveStartDate DATE NOT NULL,
+    LeaveEndDate DATE NOT NULL,
+    LeaveType NVARCHAR(50) NOT NULL DEFAULT 'LEAVE',
+    LeaveUnitType NVARCHAR(30) NOT NULL DEFAULT 'FULL_DAY',
+    StartTime TIME(7) NULL,
+    EndTime TIME(7) NULL,
+    ApprovedMinutes INT NULL,
+    Reason NVARCHAR(255) NULL,
+    Status NVARCHAR(30) NOT NULL DEFAULT 'APPROVED',
+    CreatedByUserID NVARCHAR(36) NULL,
+    UpdatedByUserID NVARCHAR(36) NULL,
+    CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+    UpdatedAt DATETIME NULL,
+    FOREIGN KEY (EmployeeID) REFERENCES dbo.Employees(EmployeeID)
+  )
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminLeaveEntries_DateRange' AND object_id = OBJECT_ID('dbo.AdminLeaveEntries'))
+BEGIN
+  CREATE INDEX IX_AdminLeaveEntries_DateRange ON dbo.AdminLeaveEntries(LeaveStartDate, LeaveEndDate, EmployeeID)
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminLeaveEntries_EmployeeDateRange' AND object_id = OBJECT_ID('dbo.AdminLeaveEntries'))
+BEGIN
+  CREATE INDEX IX_AdminLeaveEntries_EmployeeDateRange ON dbo.AdminLeaveEntries(EmployeeID, LeaveStartDate, LeaveEndDate)
+END`,
       `IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'MorningTimeOut' AND is_nullable = 0)
 BEGIN
   ALTER TABLE dbo.ShiftDefinitions ALTER COLUMN MorningTimeOut TIME(7) NULL
@@ -1112,13 +1484,91 @@ app.get('/auth/admin-users', requireAdmin, async (req, res) => {
   try {
     const pool = await getPool()
     const r = await pool.request().query(`
-      SELECT Email, Role, CreatedAt, LastLoginAt
+      SELECT UserID, Email, Role, CreatedAt, LastLoginAt
       FROM dbo.AppUsers
       WHERE Role='ADMIN' AND IsActive=1
       ORDER BY CreatedAt DESC
     `)
     res.json(r.recordset || [])
   } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.delete('/auth/admin-users/:id', requireAdmin, async (req, res) => {
+  const userId = String(req.params?.id || '').trim()
+  if (!userId) return res.status(400).json({ error: 'UserID is required' })
+
+  let transaction = null
+  try {
+    const pool = await getPool()
+    transaction = new sql.Transaction(pool)
+    await transaction.begin()
+
+    const request = new sql.Request(transaction)
+    request.input('UserID', sql.NVarChar(36), userId)
+
+    const targetRes = await request.query(`
+      SELECT TOP 1 UserID, Email, Role, IsActive, CreatedAt, LastLoginAt
+      FROM dbo.AppUsers
+      WHERE UserID=@UserID
+    `)
+    const target = targetRes.recordset?.[0] || null
+    if (!target) {
+      await transaction.rollback()
+      return res.status(404).json({ error: 'Admin account not found' })
+    }
+
+    if (String(target.Role || '').toUpperCase() !== 'ADMIN') {
+      await transaction.rollback()
+      return res.status(400).json({ error: 'Only admin accounts can be deleted here' })
+    }
+
+    if (!target.IsActive) {
+      await transaction.rollback()
+      return res.status(409).json({ error: 'Admin account is already inactive' })
+    }
+
+    const actorEmail = String(req.authUser?.email || '').trim().toLowerCase()
+    if (actorEmail && String(target.Email || '').trim().toLowerCase() === actorEmail) {
+      await transaction.rollback()
+      return res.status(403).json({ error: 'You cannot delete your own admin account' })
+    }
+
+    const countRes = await request.query(`
+      SELECT COUNT(1) AS cnt
+      FROM dbo.AppUsers
+      WHERE Role='ADMIN' AND IsActive=1
+    `)
+    const activeAdmins = Number(countRes.recordset?.[0]?.cnt || 0)
+    if (activeAdmins <= 1) {
+      await transaction.rollback()
+      return res.status(409).json({ error: 'At least one active admin account must remain' })
+    }
+
+    await request.query(`
+      UPDATE dbo.AppUsers
+      SET IsActive=0
+      WHERE UserID=@UserID
+    `)
+
+    await transaction.commit()
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'DEACTIVATE_ADMIN',
+      tableName: 'AppUsers',
+      recordID: userId,
+      beforeJson: JSON.stringify(target),
+      afterJson: JSON.stringify({ ...target, IsActive: false }),
+      ipAddress: req.ip
+    })
+
+    res.json({ success: true })
+  } catch (err) {
+    try {
+      if (transaction) await transaction.rollback()
+    } catch (_) {}
     res.status(500).json({ error: err.message })
   }
 })
@@ -1144,10 +1594,37 @@ app.post('/auth/invitations', requireAdmin, async (req, res) => {
       .input('CreatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || null))
       .query('INSERT INTO dbo.AdminInvitations (InvitationID, Email, TokenHash, ExpiresAt, CreatedByUserID) VALUES (@InvitationID, @Email, @TokenHash, @ExpiresAt, @CreatedByUserID)')
 
+    const registerPath = `/register-admin?token=${encodeURIComponent(token)}${inviteEmail ? `&email=${encodeURIComponent(inviteEmail)}` : ''}`
+    let emailSent = false
+    let emailError = null
+
+    if (inviteEmail) {
+      const registerUrl = buildAppUrl(req, registerPath)
+      const emailPayload = buildAdminInvitationEmail({
+        registerUrl,
+        inviteEmail,
+        expiresHours,
+        invitedBy: req.authUser?.email || null
+      })
+
+      try {
+        const delivery = await sendTransactionalEmail({
+          to: inviteEmail,
+          ...emailPayload
+        })
+        emailSent = Boolean(delivery?.sent)
+      } catch (emailErr) {
+        emailError = emailErr.message || String(emailErr)
+        console.error('Admin invitation email failed:', emailError)
+      }
+    }
+
     res.json({
       success: true,
       token,
-      registerPath: `/register-admin?token=${encodeURIComponent(token)}${inviteEmail ? `&email=${encodeURIComponent(inviteEmail)}` : ''}`
+      registerPath,
+      emailSent,
+      emailError
     })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -1209,9 +1686,11 @@ app.post('/auth/forgot-password', async (req, res) => {
     const u = await pool.request().input('Email', sql.NVarChar(255), email)
       .query('SELECT TOP 1 UserID, Email, Role, IsActive FROM dbo.AppUsers WHERE LOWER(Email)=@Email')
 
-    if (!u.recordset?.length) return res.json({ success: true })
+    if (!u.recordset?.length) return res.json({ success: true, resetPath: null, emailSent: false, emailError: null })
     const row = u.recordset[0]
-    if (!row.IsActive || String(row.Role || '').toUpperCase() !== 'ADMIN') return res.json({ success: true })
+    if (!row.IsActive || String(row.Role || '').toUpperCase() !== 'ADMIN') {
+      return res.json({ success: true, resetPath: null, emailSent: false, emailError: null })
+    }
 
     const token = b64urlEncode(crypto.randomBytes(32))
     const tokenHash = crypto.createHash('sha256').update(token).digest()
@@ -1226,7 +1705,28 @@ app.post('/auth/forgot-password', async (req, res) => {
       .query('INSERT INTO dbo.AdminPasswordResets (ResetID, UserID, Email, TokenHash, ExpiresAt) VALUES (@ResetID, @UserID, @Email, @TokenHash, @ExpiresAt)')
 
     const resetPath = `/reset-password?token=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`
-    res.json({ success: true, resetPath, token })
+    const resetUrl = buildAppUrl(req, resetPath)
+    let emailSent = false
+    let emailError = null
+
+    try {
+      const emailPayload = buildPasswordResetEmail({ email, resetUrl, expiresHours })
+      const delivery = await sendTransactionalEmail({
+        to: email,
+        ...emailPayload
+      })
+      emailSent = Boolean(delivery?.sent)
+    } catch (emailErr) {
+      emailError = emailErr.message || String(emailErr)
+      console.error(`Password reset email failed for ${email}:`, emailError)
+    }
+
+    res.json({
+      success: true,
+      resetPath,
+      emailSent,
+      emailError
+    })
   } catch (err) {
     const msg = String(err?.message || err)
     if (msg.toLowerCase().includes('invalid object name') && (msg.toLowerCase().includes('appusers') || msg.toLowerCase().includes('adminpasswordresets'))) {
@@ -3982,6 +4482,178 @@ function isValidIsoDate(value) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
 
+function normalizeOvertimeType(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return 'REGULAR'
+  return raw
+    .replace(/\s+/g, '_')
+    .replace(/-+/g, '_')
+    .toUpperCase()
+}
+
+function normalizeLeaveType(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return 'LEAVE'
+  return raw
+    .replace(/\s+/g, '_')
+    .replace(/-+/g, '_')
+    .toUpperCase()
+}
+
+function normalizeLeaveUnitType(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return 'FULL_DAY'
+
+  const normalized = raw
+    .replace(/\s+/g, '_')
+    .replace(/-+/g, '_')
+    .toUpperCase()
+
+  if (normalized === 'FULL' || normalized === 'FULLDAY') return 'FULL_DAY'
+  if (normalized === 'AM_HALF') return 'HALF_DAY_AM'
+  if (normalized === 'PM_HALF') return 'HALF_DAY_PM'
+  return normalized
+}
+
+function parseOptionalTimeValue(value, fieldName) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const parsed = parseTimeString(raw)
+  if (!parsed) throw new Error(`${fieldName} must be a valid time`)
+  return parsed
+}
+
+function timeLiteralToMinutes(value) {
+  const parsed = parseTimeString(value)
+  if (!parsed) return null
+  const parts = parsed.split(':')
+  const hh = Number(parts[0] || 0)
+  const mm = Number(parts[1] || 0)
+  return hh * 60 + mm
+}
+
+function computeMinutesBetweenTimes(startTime, endTime) {
+  if (!startTime || !endTime) return null
+  const startMinutes = timeLiteralToMinutes(startTime)
+  const endMinutes = timeLiteralToMinutes(endTime)
+  if (startMinutes == null || endMinutes == null) return null
+  const diff = endMinutes - startMinutes
+  if (diff <= 0) return null
+  return diff
+}
+
+function resolveApprovedMinutes({
+  approvedMinutes,
+  approvedHours,
+  startTime,
+  endTime
+}) {
+  if (approvedMinutes !== undefined && approvedMinutes !== null && String(approvedMinutes).trim() !== '') {
+    const numeric = Number(approvedMinutes)
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      throw new Error('ApprovedMinutes must be a non-negative number')
+    }
+    return Math.round(numeric)
+  }
+
+  if (approvedHours !== undefined && approvedHours !== null && String(approvedHours).trim() !== '') {
+    const numeric = Number(approvedHours)
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      throw new Error('ApprovedHours must be a non-negative number')
+    }
+    return Math.round(numeric * 60)
+  }
+
+  if ((startTime && !endTime) || (!startTime && endTime)) {
+    throw new Error('StartTime and EndTime must both be provided')
+  }
+
+  const computed = computeMinutesBetweenTimes(startTime, endTime)
+  if (startTime && endTime && computed == null) {
+    throw new Error('EndTime must be later than StartTime')
+  }
+
+  return computed
+}
+
+async function ensureEmployeeExists(pool, employeeId) {
+  const result = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeId)
+    .query('SELECT TOP 1 EmployeeID FROM dbo.Employees WHERE EmployeeID=@EmployeeID')
+
+  return Boolean(result.recordset?.length)
+}
+
+const overtimeEntrySelectSql = `
+  SELECT
+    ot.OvertimeEntryID,
+    ot.EmployeeID,
+    e.EmployeeCode,
+    CONCAT(e.FirstName, ' ', e.LastName) AS EmployeeName,
+    e.Department,
+    CONVERT(varchar(10), ot.OvertimeDate, 23) AS OvertimeDate,
+    CONVERT(varchar(5), ot.StartTime, 108) AS StartTime,
+    CONVERT(varchar(5), ot.EndTime, 108) AS EndTime,
+    ot.ApprovedMinutes,
+    CAST(CAST(ISNULL(ot.ApprovedMinutes, 0) AS DECIMAL(10, 2)) / 60.0 AS DECIMAL(10, 2)) AS ApprovedHours,
+    ot.OvertimeType,
+    ot.Reason,
+    ot.Status,
+    ot.CreatedByUserID,
+    ot.UpdatedByUserID,
+    ot.CreatedAt,
+    ot.UpdatedAt
+  FROM dbo.AdminOvertimeEntries ot
+  JOIN dbo.Employees e ON e.EmployeeID = ot.EmployeeID
+`
+
+const leaveEntrySelectSql = `
+  SELECT
+    le.LeaveEntryID,
+    le.EmployeeID,
+    e.EmployeeCode,
+    CONCAT(e.FirstName, ' ', e.LastName) AS EmployeeName,
+    e.Department,
+    CONVERT(varchar(10), le.LeaveStartDate, 23) AS LeaveStartDate,
+    CONVERT(varchar(10), le.LeaveEndDate, 23) AS LeaveEndDate,
+    le.LeaveType,
+    le.LeaveUnitType,
+    CONVERT(varchar(5), le.StartTime, 108) AS StartTime,
+    CONVERT(varchar(5), le.EndTime, 108) AS EndTime,
+    le.ApprovedMinutes,
+    CAST(CAST(ISNULL(le.ApprovedMinutes, 0) AS DECIMAL(10, 2)) / 60.0 AS DECIMAL(10, 2)) AS ApprovedHours,
+    le.Reason,
+    le.Status,
+    le.CreatedByUserID,
+    le.UpdatedByUserID,
+    le.CreatedAt,
+    le.UpdatedAt
+  FROM dbo.AdminLeaveEntries le
+  JOIN dbo.Employees e ON e.EmployeeID = le.EmployeeID
+`
+
+async function fetchOvertimeEntryById(pool, entryId) {
+  const result = await pool.request()
+    .input('OvertimeEntryID', sql.NVarChar(36), entryId)
+    .query(`
+      ${overtimeEntrySelectSql}
+      WHERE ot.OvertimeEntryID=@OvertimeEntryID
+    `)
+
+  return result.recordset?.[0] || null
+}
+
+async function fetchLeaveEntryById(pool, entryId) {
+  const result = await pool.request()
+    .input('LeaveEntryID', sql.NVarChar(36), entryId)
+    .query(`
+      ${leaveEntrySelectSql}
+      WHERE le.LeaveEntryID=@LeaveEntryID
+    `)
+
+  return result.recordset?.[0] || null
+}
+
 app.get('/special-days', requireAdmin, async (req, res) => {
   try {
     const pool = await getPool()
@@ -4132,6 +4804,425 @@ app.delete('/special-days/:id', requireAdmin, async (req, res) => {
       tableName: 'SpecialDays',
       recordID: id,
       beforeJson: JSON.stringify(before.recordset?.[0] || {})
+    })
+
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+app.get('/overtime-entries', requireAdmin, async (req, res) => {
+  const from = String(req.query?.from || '').trim()
+  const to = String(req.query?.to || '').trim()
+  const employeeId = String(req.query?.employeeId || '').trim()
+
+  if (from && !isValidIsoDate(from)) return res.status(400).json({ error: 'from must be YYYY-MM-DD' })
+  if (to && !isValidIsoDate(to)) return res.status(400).json({ error: 'to must be YYYY-MM-DD' })
+
+  try {
+    const pool = await getPool()
+    const request = pool.request()
+      .input('FromDate', sql.Date, from || null)
+      .input('ToDate', sql.Date, to || null)
+      .input('EmployeeID', sql.NVarChar(36), employeeId || null)
+
+    const result = await request.query(`
+      ${overtimeEntrySelectSql}
+      WHERE (@FromDate IS NULL OR ot.OvertimeDate >= @FromDate)
+        AND (@ToDate IS NULL OR ot.OvertimeDate <= @ToDate)
+        AND (@EmployeeID IS NULL OR ot.EmployeeID = @EmployeeID)
+      ORDER BY ot.OvertimeDate DESC, EmployeeName ASC
+    `)
+
+    res.json(result.recordset || [])
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('invalid object name') && msg.toLowerCase().includes('adminovertimeentries')) {
+      return res.status(503).json({ error: 'Overtime tables are not initialized yet. Restart the backend server to run migrations.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.post('/overtime-entries', requireAdmin, async (req, res) => {
+  const employeeId = String(req.body?.EmployeeID || req.body?.employeeID || '').trim()
+  const overtimeDate = String(req.body?.OvertimeDate || req.body?.overtimeDate || '').trim()
+  const overtimeType = normalizeOvertimeType(req.body?.OvertimeType || req.body?.overtimeType)
+  const reason = req.body?.Reason ?? req.body?.reason ?? null
+
+  if (!employeeId) return res.status(400).json({ error: 'EmployeeID is required' })
+  if (!isValidIsoDate(overtimeDate)) return res.status(400).json({ error: 'OvertimeDate is required (YYYY-MM-DD)' })
+
+  try {
+    const pool = await getPool()
+    const employeeExists = await ensureEmployeeExists(pool, employeeId)
+    if (!employeeExists) return res.status(404).json({ error: 'Employee not found' })
+
+    const startTime = parseOptionalTimeValue(req.body?.StartTime ?? req.body?.startTime, 'StartTime')
+    const endTime = parseOptionalTimeValue(req.body?.EndTime ?? req.body?.endTime, 'EndTime')
+    const approvedMinutes = resolveApprovedMinutes({
+      approvedMinutes: req.body?.ApprovedMinutes ?? req.body?.approvedMinutes,
+      approvedHours: req.body?.ApprovedHours ?? req.body?.approvedHours,
+      startTime,
+      endTime
+    })
+
+    if (approvedMinutes == null || approvedMinutes <= 0) {
+      return res.status(400).json({ error: 'Provide ApprovedHours/ApprovedMinutes or a valid StartTime/EndTime window.' })
+    }
+
+    const { randomUUID } = require('crypto')
+    const entryId = randomUUID()
+
+    await pool.request()
+      .input('OvertimeEntryID', sql.NVarChar(36), entryId)
+      .input('EmployeeID', sql.NVarChar(36), employeeId)
+      .input('OvertimeDate', sql.Date, overtimeDate)
+      .input('StartTime', sql.NVarChar(8), startTime)
+      .input('EndTime', sql.NVarChar(8), endTime)
+      .input('ApprovedMinutes', sql.Int, approvedMinutes)
+      .input('OvertimeType', sql.NVarChar(50), overtimeType)
+      .input('Reason', sql.NVarChar(255), reason ? String(reason).trim() : null)
+      .input('CreatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || '').trim() || null)
+      .query(`
+        INSERT INTO dbo.AdminOvertimeEntries
+        (OvertimeEntryID, EmployeeID, OvertimeDate, StartTime, EndTime, ApprovedMinutes, OvertimeType, Reason, Status, CreatedByUserID)
+        VALUES
+        (@OvertimeEntryID, @EmployeeID, @OvertimeDate, CAST(@StartTime AS TIME(7)), CAST(@EndTime AS TIME(7)), @ApprovedMinutes, @OvertimeType, @Reason, 'APPROVED', @CreatedByUserID)
+      `)
+
+    const created = await fetchOvertimeEntryById(pool, entryId)
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'CREATE',
+      tableName: 'AdminOvertimeEntries',
+      recordID: entryId,
+      afterJson: JSON.stringify(created || {})
+    })
+
+    res.json(created)
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+app.put('/overtime-entries/:id', requireAdmin, async (req, res) => {
+  const entryId = String(req.params?.id || '').trim()
+  if (!entryId) return res.status(400).json({ error: 'OvertimeEntryID is required' })
+
+  try {
+    const pool = await getPool()
+    const before = await fetchOvertimeEntryById(pool, entryId)
+    if (!before) return res.status(404).json({ error: 'Not found' })
+
+    const employeeId = String(req.body?.EmployeeID || req.body?.employeeID || before.EmployeeID || '').trim()
+    const overtimeDate = String(req.body?.OvertimeDate || req.body?.overtimeDate || before.OvertimeDate || '').trim()
+    const overtimeType = normalizeOvertimeType(req.body?.OvertimeType || req.body?.overtimeType || before.OvertimeType)
+    const reason = req.body?.Reason ?? req.body?.reason ?? before.Reason ?? null
+
+    if (!employeeId) return res.status(400).json({ error: 'EmployeeID is required' })
+    if (!isValidIsoDate(overtimeDate)) return res.status(400).json({ error: 'OvertimeDate is required (YYYY-MM-DD)' })
+
+    const employeeExists = await ensureEmployeeExists(pool, employeeId)
+    if (!employeeExists) return res.status(404).json({ error: 'Employee not found' })
+
+    const startTime = parseOptionalTimeValue(
+      req.body?.StartTime ?? req.body?.startTime ?? before.StartTime,
+      'StartTime'
+    )
+    const endTime = parseOptionalTimeValue(
+      req.body?.EndTime ?? req.body?.endTime ?? before.EndTime,
+      'EndTime'
+    )
+    const approvedMinutes = resolveApprovedMinutes({
+      approvedMinutes: req.body?.ApprovedMinutes ?? req.body?.approvedMinutes ?? before.ApprovedMinutes,
+      approvedHours: req.body?.ApprovedHours ?? req.body?.approvedHours,
+      startTime,
+      endTime
+    })
+
+    if (approvedMinutes == null || approvedMinutes <= 0) {
+      return res.status(400).json({ error: 'Provide ApprovedHours/ApprovedMinutes or a valid StartTime/EndTime window.' })
+    }
+
+    await pool.request()
+      .input('OvertimeEntryID', sql.NVarChar(36), entryId)
+      .input('EmployeeID', sql.NVarChar(36), employeeId)
+      .input('OvertimeDate', sql.Date, overtimeDate)
+      .input('StartTime', sql.NVarChar(8), startTime)
+      .input('EndTime', sql.NVarChar(8), endTime)
+      .input('ApprovedMinutes', sql.Int, approvedMinutes)
+      .input('OvertimeType', sql.NVarChar(50), overtimeType)
+      .input('Reason', sql.NVarChar(255), reason ? String(reason).trim() : null)
+      .input('UpdatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || '').trim() || null)
+      .query(`
+        UPDATE dbo.AdminOvertimeEntries
+        SET EmployeeID=@EmployeeID,
+            OvertimeDate=@OvertimeDate,
+            StartTime=CAST(@StartTime AS TIME(7)),
+            EndTime=CAST(@EndTime AS TIME(7)),
+            ApprovedMinutes=@ApprovedMinutes,
+            OvertimeType=@OvertimeType,
+            Reason=@Reason,
+            UpdatedByUserID=@UpdatedByUserID,
+            UpdatedAt=GETDATE()
+        WHERE OvertimeEntryID=@OvertimeEntryID
+      `)
+
+    const updated = await fetchOvertimeEntryById(pool, entryId)
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'UPDATE',
+      tableName: 'AdminOvertimeEntries',
+      recordID: entryId,
+      beforeJson: JSON.stringify(before),
+      afterJson: JSON.stringify(updated || {})
+    })
+
+    res.json(updated)
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+app.delete('/overtime-entries/:id', requireAdmin, async (req, res) => {
+  const entryId = String(req.params?.id || '').trim()
+  if (!entryId) return res.status(400).json({ error: 'OvertimeEntryID is required' })
+
+  try {
+    const pool = await getPool()
+    const before = await fetchOvertimeEntryById(pool, entryId)
+    if (!before) return res.status(404).json({ error: 'Not found' })
+
+    await pool.request()
+      .input('OvertimeEntryID', sql.NVarChar(36), entryId)
+      .query('DELETE FROM dbo.AdminOvertimeEntries WHERE OvertimeEntryID=@OvertimeEntryID')
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'DELETE',
+      tableName: 'AdminOvertimeEntries',
+      recordID: entryId,
+      beforeJson: JSON.stringify(before)
+    })
+
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+app.get('/leave-entries', requireAdmin, async (req, res) => {
+  const from = String(req.query?.from || '').trim()
+  const to = String(req.query?.to || '').trim()
+  const employeeId = String(req.query?.employeeId || '').trim()
+
+  if (from && !isValidIsoDate(from)) return res.status(400).json({ error: 'from must be YYYY-MM-DD' })
+  if (to && !isValidIsoDate(to)) return res.status(400).json({ error: 'to must be YYYY-MM-DD' })
+
+  try {
+    const pool = await getPool()
+    const request = pool.request()
+      .input('FromDate', sql.Date, from || null)
+      .input('ToDate', sql.Date, to || null)
+      .input('EmployeeID', sql.NVarChar(36), employeeId || null)
+
+    const result = await request.query(`
+      ${leaveEntrySelectSql}
+      WHERE (@FromDate IS NULL OR le.LeaveEndDate >= @FromDate)
+        AND (@ToDate IS NULL OR le.LeaveStartDate <= @ToDate)
+        AND (@EmployeeID IS NULL OR le.EmployeeID = @EmployeeID)
+      ORDER BY le.LeaveStartDate DESC, EmployeeName ASC
+    `)
+
+    res.json(result.recordset || [])
+  } catch (err) {
+    const msg = String(err?.message || err)
+    if (msg.toLowerCase().includes('invalid object name') && msg.toLowerCase().includes('adminleaveentries')) {
+      return res.status(503).json({ error: 'Leave tables are not initialized yet. Restart the backend server to run migrations.' })
+    }
+    res.status(500).json({ error: msg })
+  }
+})
+
+app.post('/leave-entries', requireAdmin, async (req, res) => {
+  const employeeId = String(req.body?.EmployeeID || req.body?.employeeID || '').trim()
+  const leaveStartDate = String(req.body?.LeaveStartDate || req.body?.leaveStartDate || '').trim()
+  const leaveEndDate = String(req.body?.LeaveEndDate || req.body?.leaveEndDate || leaveStartDate || '').trim()
+  const leaveType = normalizeLeaveType(req.body?.LeaveType || req.body?.leaveType)
+  const leaveUnitType = normalizeLeaveUnitType(req.body?.LeaveUnitType || req.body?.leaveUnitType)
+  const reason = req.body?.Reason ?? req.body?.reason ?? null
+
+  if (!employeeId) return res.status(400).json({ error: 'EmployeeID is required' })
+  if (!isValidIsoDate(leaveStartDate)) return res.status(400).json({ error: 'LeaveStartDate is required (YYYY-MM-DD)' })
+  if (!isValidIsoDate(leaveEndDate)) return res.status(400).json({ error: 'LeaveEndDate is required (YYYY-MM-DD)' })
+  if (leaveEndDate < leaveStartDate) return res.status(400).json({ error: 'LeaveEndDate cannot be earlier than LeaveStartDate' })
+
+  try {
+    const pool = await getPool()
+    const employeeExists = await ensureEmployeeExists(pool, employeeId)
+    if (!employeeExists) return res.status(404).json({ error: 'Employee not found' })
+
+    const startTime = parseOptionalTimeValue(req.body?.StartTime ?? req.body?.startTime, 'StartTime')
+    const endTime = parseOptionalTimeValue(req.body?.EndTime ?? req.body?.endTime, 'EndTime')
+    const approvedMinutes = resolveApprovedMinutes({
+      approvedMinutes: req.body?.ApprovedMinutes ?? req.body?.approvedMinutes,
+      approvedHours: req.body?.ApprovedHours ?? req.body?.approvedHours,
+      startTime,
+      endTime
+    })
+
+    if (leaveUnitType !== 'FULL_DAY' && leaveStartDate !== leaveEndDate) {
+      return res.status(400).json({ error: 'Multi-day leave is only supported for FULL_DAY entries right now.' })
+    }
+
+    const { randomUUID } = require('crypto')
+    const entryId = randomUUID()
+
+    await pool.request()
+      .input('LeaveEntryID', sql.NVarChar(36), entryId)
+      .input('EmployeeID', sql.NVarChar(36), employeeId)
+      .input('LeaveStartDate', sql.Date, leaveStartDate)
+      .input('LeaveEndDate', sql.Date, leaveEndDate)
+      .input('LeaveType', sql.NVarChar(50), leaveType)
+      .input('LeaveUnitType', sql.NVarChar(30), leaveUnitType)
+      .input('StartTime', sql.NVarChar(8), startTime)
+      .input('EndTime', sql.NVarChar(8), endTime)
+      .input('ApprovedMinutes', sql.Int, approvedMinutes)
+      .input('Reason', sql.NVarChar(255), reason ? String(reason).trim() : null)
+      .input('CreatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || '').trim() || null)
+      .query(`
+        INSERT INTO dbo.AdminLeaveEntries
+        (LeaveEntryID, EmployeeID, LeaveStartDate, LeaveEndDate, LeaveType, LeaveUnitType, StartTime, EndTime, ApprovedMinutes, Reason, Status, CreatedByUserID)
+        VALUES
+        (@LeaveEntryID, @EmployeeID, @LeaveStartDate, @LeaveEndDate, @LeaveType, @LeaveUnitType, CAST(@StartTime AS TIME(7)), CAST(@EndTime AS TIME(7)), @ApprovedMinutes, @Reason, 'APPROVED', @CreatedByUserID)
+      `)
+
+    const created = await fetchLeaveEntryById(pool, entryId)
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'CREATE',
+      tableName: 'AdminLeaveEntries',
+      recordID: entryId,
+      afterJson: JSON.stringify(created || {})
+    })
+
+    res.json(created)
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+app.put('/leave-entries/:id', requireAdmin, async (req, res) => {
+  const entryId = String(req.params?.id || '').trim()
+  if (!entryId) return res.status(400).json({ error: 'LeaveEntryID is required' })
+
+  try {
+    const pool = await getPool()
+    const before = await fetchLeaveEntryById(pool, entryId)
+    if (!before) return res.status(404).json({ error: 'Not found' })
+
+    const employeeId = String(req.body?.EmployeeID || req.body?.employeeID || before.EmployeeID || '').trim()
+    const leaveStartDate = String(req.body?.LeaveStartDate || req.body?.leaveStartDate || before.LeaveStartDate || '').trim()
+    const leaveEndDate = String(req.body?.LeaveEndDate || req.body?.leaveEndDate || before.LeaveEndDate || leaveStartDate || '').trim()
+    const leaveType = normalizeLeaveType(req.body?.LeaveType || req.body?.leaveType || before.LeaveType)
+    const leaveUnitType = normalizeLeaveUnitType(req.body?.LeaveUnitType || req.body?.leaveUnitType || before.LeaveUnitType)
+    const reason = req.body?.Reason ?? req.body?.reason ?? before.Reason ?? null
+
+    if (!employeeId) return res.status(400).json({ error: 'EmployeeID is required' })
+    if (!isValidIsoDate(leaveStartDate)) return res.status(400).json({ error: 'LeaveStartDate is required (YYYY-MM-DD)' })
+    if (!isValidIsoDate(leaveEndDate)) return res.status(400).json({ error: 'LeaveEndDate is required (YYYY-MM-DD)' })
+    if (leaveEndDate < leaveStartDate) return res.status(400).json({ error: 'LeaveEndDate cannot be earlier than LeaveStartDate' })
+    if (leaveUnitType !== 'FULL_DAY' && leaveStartDate !== leaveEndDate) {
+      return res.status(400).json({ error: 'Multi-day leave is only supported for FULL_DAY entries right now.' })
+    }
+
+    const employeeExists = await ensureEmployeeExists(pool, employeeId)
+    if (!employeeExists) return res.status(404).json({ error: 'Employee not found' })
+
+    const startTime = parseOptionalTimeValue(
+      req.body?.StartTime ?? req.body?.startTime ?? before.StartTime,
+      'StartTime'
+    )
+    const endTime = parseOptionalTimeValue(
+      req.body?.EndTime ?? req.body?.endTime ?? before.EndTime,
+      'EndTime'
+    )
+    const approvedMinutes = resolveApprovedMinutes({
+      approvedMinutes: req.body?.ApprovedMinutes ?? req.body?.approvedMinutes ?? before.ApprovedMinutes,
+      approvedHours: req.body?.ApprovedHours ?? req.body?.approvedHours,
+      startTime,
+      endTime
+    })
+
+    await pool.request()
+      .input('LeaveEntryID', sql.NVarChar(36), entryId)
+      .input('EmployeeID', sql.NVarChar(36), employeeId)
+      .input('LeaveStartDate', sql.Date, leaveStartDate)
+      .input('LeaveEndDate', sql.Date, leaveEndDate)
+      .input('LeaveType', sql.NVarChar(50), leaveType)
+      .input('LeaveUnitType', sql.NVarChar(30), leaveUnitType)
+      .input('StartTime', sql.NVarChar(8), startTime)
+      .input('EndTime', sql.NVarChar(8), endTime)
+      .input('ApprovedMinutes', sql.Int, approvedMinutes)
+      .input('Reason', sql.NVarChar(255), reason ? String(reason).trim() : null)
+      .input('UpdatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || '').trim() || null)
+      .query(`
+        UPDATE dbo.AdminLeaveEntries
+        SET EmployeeID=@EmployeeID,
+            LeaveStartDate=@LeaveStartDate,
+            LeaveEndDate=@LeaveEndDate,
+            LeaveType=@LeaveType,
+            LeaveUnitType=@LeaveUnitType,
+            StartTime=CAST(@StartTime AS TIME(7)),
+            EndTime=CAST(@EndTime AS TIME(7)),
+            ApprovedMinutes=@ApprovedMinutes,
+            Reason=@Reason,
+            UpdatedByUserID=@UpdatedByUserID,
+            UpdatedAt=GETDATE()
+        WHERE LeaveEntryID=@LeaveEntryID
+      `)
+
+    const updated = await fetchLeaveEntryById(pool, entryId)
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'UPDATE',
+      tableName: 'AdminLeaveEntries',
+      recordID: entryId,
+      beforeJson: JSON.stringify(before),
+      afterJson: JSON.stringify(updated || {})
+    })
+
+    res.json(updated)
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) })
+  }
+})
+
+app.delete('/leave-entries/:id', requireAdmin, async (req, res) => {
+  const entryId = String(req.params?.id || '').trim()
+  if (!entryId) return res.status(400).json({ error: 'LeaveEntryID is required' })
+
+  try {
+    const pool = await getPool()
+    const before = await fetchLeaveEntryById(pool, entryId)
+    if (!before) return res.status(404).json({ error: 'Not found' })
+
+    await pool.request()
+      .input('LeaveEntryID', sql.NVarChar(36), entryId)
+      .query('DELETE FROM dbo.AdminLeaveEntries WHERE LeaveEntryID=@LeaveEntryID')
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'DELETE',
+      tableName: 'AdminLeaveEntries',
+      recordID: entryId,
+      beforeJson: JSON.stringify(before)
     })
 
     res.json({ success: true })
@@ -4374,9 +5465,6 @@ app.get('/attendance/today', async (req, res) => {
                 OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
                 OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
                 OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
-              WHEN
-                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
               WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
               WHEN a.AfternoonTimeIn IS NOT NULL
                    AND sp.ReqAfternoonIn IS NOT NULL
@@ -4387,6 +5475,9 @@ app.get('/attendance/today', async (req, res) => {
               WHEN a.AfternoonTimeOut IS NOT NULL
                    AND sp.ReqAfternoonOut IS NOT NULL
                    AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
+              WHEN
+                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
               ELSE 'On-Time'
             END AS AttendanceSummary
         FROM ShiftPick sp
@@ -4516,9 +5607,6 @@ app.post('/attendance/range', async (req, res) => {
                 OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
                 OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
                 OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
-              WHEN
-                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
               WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
               WHEN a.AfternoonTimeIn IS NOT NULL
                    AND sp.ReqAfternoonIn IS NOT NULL
@@ -4529,6 +5617,9 @@ app.post('/attendance/range', async (req, res) => {
               WHEN a.AfternoonTimeOut IS NOT NULL
                    AND sp.ReqAfternoonOut IS NOT NULL
                    AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
+              WHEN
+                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
               ELSE 'On-Time'
             END AS AttendanceSummary
         FROM ShiftPick sp
@@ -4803,12 +5894,18 @@ app.post('/attendance/raw-range', async (req, res) => {
               OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
               OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
               OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
-            WHEN
-              (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
-              OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
             WHEN sched.ReqMorningIn IS NOT NULL AND a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
             WHEN sched.ReqAfternoonIn IS NOT NULL AND a.AfternoonTimeIn IS NOT NULL
                  AND a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+            WHEN a.MorningTimeOut IS NOT NULL
+                 AND sched.ReqMorningOut IS NOT NULL
+                 AND a.MorningTimeOut < sched.ReqMorningOut THEN 'Early Leave'
+            WHEN a.AfternoonTimeOut IS NOT NULL
+                 AND sched.ReqAfternoonOut IS NOT NULL
+                 AND a.AfternoonTimeOut < sched.ReqAfternoonOut THEN 'Early Leave'
+            WHEN
+              (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+              OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
             ELSE 'On-Time'
           END AS AttendanceSummary
         FROM dbo.AttendanceRecords a
@@ -4909,6 +6006,8 @@ app.post('/employees', async (req, res) => {
     res.json(created)
   } catch (err) {
     console.error(err)
+    const friendly = getEmployeeSaveErrorMessage(err)
+    if (friendly) return res.status(409).json({ error: friendly })
     res.status(500).json({ error: err.message })
   }
 })
@@ -4991,6 +6090,8 @@ app.put('/employees/:id', async (req, res) => {
     res.json(updated)
   } catch (err) {
     console.error(err)
+    const friendly = getEmployeeSaveErrorMessage(err)
+    if (friendly) return res.status(409).json({ error: friendly })
     res.status(500).json({ error: err.message })
   }
 })
@@ -5138,15 +6239,3 @@ process.on('SIGINT', async () => {
   try { await sql.close() } catch (e) {}
   process.exit(0)
 })
-
-
-
-
-
-
-
-
-
-
-
-

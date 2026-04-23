@@ -1,32 +1,88 @@
-﻿import React, { useState } from 'react'
-import { login } from '../api'
+import React, { useEffect, useState } from 'react'
+import { fetchBootstrapStatus, login, setupAdmin } from '../api'
 import DarkVeil from './ui/DarkVeil'
 
 export default function LoginPage({ onSuccess }) {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [hasAdmin, setHasAdmin] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  useEffect(() => {
+    let mounted = true
+
+    fetchBootstrapStatus()
+      .then((data) => {
+        if (mounted) {
+          setHasAdmin(Boolean(data?.hasAdmin))
+        }
+      })
+      .catch((err) => {
+        if (mounted) {
+          setHasAdmin(true)
+          setError(err?.message || 'Unable to load the admin setup status.')
+        }
+      })
+
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const isSetupMode = hasAdmin === false
+  const isCheckingSetup = hasAdmin === null
+
+  const clearError = () => {
+    if (error) setError(null)
+  }
+
   const submit = async (e) => {
     e.preventDefault()
-    setError(null)
-    if (!username.trim() || !password.trim()) {
-      setError('Please enter both email and password.')
+    clearError()
+
+    const trimmedEmail = email.trim().toLowerCase()
+    if (!trimmedEmail || !password.trim()) {
+      setError(isSetupMode ? 'Please enter your admin email and password.' : 'Please enter both email and password.')
       return
     }
+
+    if (isSetupMode) {
+      if (!trimmedEmail.includes('@')) {
+        setError('Enter a valid admin email.')
+        return
+      }
+      if (password.length < 8) {
+        setError('Password must be at least 8 characters.')
+        return
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.')
+        return
+      }
+    }
+
     try {
       setLoading(true)
-      const data = await login(username, password)
+
+      if (isSetupMode) {
+        const data = await setupAdmin(trimmedEmail, password)
+        localStorage.setItem('authToken', data.token)
+        onSuccess?.(data)
+        return
+      }
+
+      const data = await login(trimmedEmail, password)
       localStorage.setItem('authToken', data.token)
       onSuccess?.(data)
     } catch (err) {
-      if (err?.status === 401) {
+      if (!isSetupMode && err?.status === 401) {
         setError('Invalid email or password.')
       } else if (err?.message) {
         setError(err.message)
       } else {
-        setError('Login failed. Please try again.')
+        setError(isSetupMode ? 'Admin setup failed. Please try again.' : 'Login failed. Please try again.')
       }
     } finally {
       setLoading(false)
@@ -71,7 +127,7 @@ export default function LoginPage({ onSuccess }) {
 
       <div
         style={{
-          maxWidth: 340,
+          maxWidth: 360,
           width: '100%',
           padding: 22,
           borderRadius: 14,
@@ -85,23 +141,43 @@ export default function LoginPage({ onSuccess }) {
         }}
       >
         <h3 style={{ marginTop: 0, color: '#f8fbff', textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
-          Admin Login
+          {isSetupMode ? 'Create Local Admin' : 'Admin Login'}
         </h3>
+
+        <p
+          style={{
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: '#e2ebff',
+            marginTop: 0,
+            marginBottom: 12,
+            textShadow: '0 2px 10px rgba(0,0,0,0.45)'
+          }}
+        >
+          {isCheckingSetup
+            ? 'Checking the local admin setup on this machine.'
+            : isSetupMode
+              ? 'No admin account exists yet. Create the first local admin here to keep the system private on this computer.'
+              : 'Sign in with your local admin account, or open a pasted invite/reset link directly while testing on localhost.'}
+        </p>
+
         {error && (
           <div role="alert" aria-live="polite" style={{ color: '#ffd8d8', marginBottom: 8, fontWeight: 600 }}>
             {error}
           </div>
         )}
+
         <form onSubmit={submit}>
           <input
             className="login-glass-input"
-            value={username}
+            value={email}
             onChange={(e) => {
-              setUsername(e.target.value)
-              if (error) setError(null)
+              setEmail(e.target.value)
+              clearError()
             }}
-            placeholder="Email"
+            placeholder="Admin email"
             style={input}
+            disabled={loading || isCheckingSetup}
           />
           <input
             className="login-glass-input"
@@ -109,51 +185,54 @@ export default function LoginPage({ onSuccess }) {
             value={password}
             onChange={(e) => {
               setPassword(e.target.value)
-              if (error) setError(null)
+              clearError()
             }}
-            placeholder="Password"
+            placeholder={isSetupMode ? 'Password (min 8 chars)' : 'Password'}
             style={input}
+            disabled={loading || isCheckingSetup}
           />
+          {isSetupMode && (
+            <input
+              className="login-glass-input"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value)
+                clearError()
+              }}
+              placeholder="Confirm password"
+              style={input}
+              disabled={loading || isCheckingSetup}
+            />
+          )}
           <button
             className="login-glass-input"
             type="submit"
-            disabled={loading}
-            style={{ ...input, cursor: 'pointer' }}
+            disabled={loading || isCheckingSetup}
+            style={{ ...input, cursor: loading || isCheckingSetup ? 'wait' : 'pointer', marginBottom: 0 }}
           >
-            {loading ? 'Signing in...' : 'Login'}
+            {isCheckingSetup
+              ? 'Checking...'
+              : loading
+                ? (isSetupMode ? 'Creating admin...' : 'Signing in...')
+                : (isSetupMode ? 'Create Admin Account' : 'Login')}
           </button>
         </form>
-        <p
-          style={{
-            fontSize: 12,
-            color: '#e2ebff',
-            marginBottom: 0,
-            textShadow: '0 2px 10px rgba(0,0,0,0.45)'
-          }}
-        >
-          First time setup?{' '}
-          <a
-            href="/register-admin"
-            onClick={(e) => {
-              e.preventDefault()
-              window.location.href = '/register-admin'
-            }}
-            style={{ color: '#e2ebff', fontWeight: 800 }}
-          >
-            Create the first admin
-          </a>
-          {' · '}
-          <a
-            href="/forgot-password"
-            onClick={(e) => {
-              e.preventDefault()
-              window.location.href = '/forgot-password'
-            }}
-            style={{ color: '#e2ebff', fontWeight: 800 }}
-          >
-            Forgot password
-          </a>
-        </p>
+
+        {!isCheckingSetup && !isSetupMode && (
+          <p style={{ fontSize: 12, color: '#e2ebff', marginBottom: 0, marginTop: 10, textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
+            <a
+              href="/forgot-password"
+              onClick={(e) => {
+                e.preventDefault()
+                window.location.href = '/forgot-password'
+              }}
+              style={{ color: '#e2ebff', fontWeight: 800 }}
+            >
+              Forgot password?
+            </a>
+          </p>
+        )}
       </div>
     </div>
   )

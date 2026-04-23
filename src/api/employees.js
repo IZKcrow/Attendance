@@ -2,8 +2,15 @@ const BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
 
 async function handleRes(res) {
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`${res.status} ${res.statusText} ${text}`)
+    let message = `${res.status} ${res.statusText}`
+    try {
+      const data = await res.json()
+      if (data?.error) message = String(data.error)
+    } catch (_) {
+      const text = await res.text().catch(() => '')
+      if (text) message = text
+    }
+    throw new Error(message)
   }
   return res.json().catch(() => null)
 }

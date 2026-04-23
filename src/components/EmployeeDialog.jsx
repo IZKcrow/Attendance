@@ -21,6 +21,7 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
     email: '',
     phone: ''
   }))
+  const [saving, setSaving] = React.useState(false)
 
   React.useEffect(() => {
     if (initial) setForm(initial)
@@ -29,9 +30,15 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
 
   const handleChange = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
 
-  const handleSave = () => {
-    onSave(form)
-    onClose()
+  const handleSave = async () => {
+    if (saving) return
+    setSaving(true)
+    try {
+      const ok = await onSave(form)
+      if (ok !== false) onClose()
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -63,8 +70,10 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
         </Grid>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={handleSave}>Save</Button>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button variant="contained" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving...' : 'Save'}
+        </Button>
       </DialogActions>
     </Dialog>
   )

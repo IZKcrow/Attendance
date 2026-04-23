@@ -105,6 +105,18 @@ export async function fetchAdminUsers() {
   return fetchAll('auth/admin-users')
 }
 
+export async function deleteAdminUser(id) {
+  const res = await fetch(`${BASE}/auth/admin-users/${id}`, {
+    method: 'DELETE',
+    headers: withAuthHeaders()
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw buildApiError(res, text)
+  }
+  return res.json().catch(() => null)
+}
+
 export async function createAdminInvitation(email, expiresHours = 24) {
   const res = await fetch(`${BASE}/auth/invitations`, {
     method: 'POST',
@@ -495,6 +507,54 @@ export async function fetchAuditLogs() {
 
 export async function fetchSpecialDays() {
   return fetchAll('special-days')
+}
+
+function buildQueryString(params = {}) {
+  const search = new URLSearchParams()
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    search.set(key, String(value))
+  })
+  const query = search.toString()
+  return query ? `?${query}` : ''
+}
+
+export async function fetchOvertimeEntries({ from = null, to = null, employeeId = null } = {}) {
+  const res = await fetch(`${BASE}/overtime-entries${buildQueryString({ from, to, employeeId })}`, {
+    headers: withAuthHeaders()
+  })
+  return handleRes(res)
+}
+
+export async function createOvertimeEntry(data) {
+  return createRecord('overtime-entries', data)
+}
+
+export async function updateOvertimeEntry(id, data) {
+  return updateRecord('overtime-entries', id, data)
+}
+
+export async function deleteOvertimeEntry(id) {
+  return deleteRecord('overtime-entries', id)
+}
+
+export async function fetchLeaveEntries({ from = null, to = null, employeeId = null } = {}) {
+  const res = await fetch(`${BASE}/leave-entries${buildQueryString({ from, to, employeeId })}`, {
+    headers: withAuthHeaders()
+  })
+  return handleRes(res)
+}
+
+export async function createLeaveEntry(data) {
+  return createRecord('leave-entries', data)
+}
+
+export async function updateLeaveEntry(id, data) {
+  return updateRecord('leave-entries', id, data)
+}
+
+export async function deleteLeaveEntry(id) {
+  return deleteRecord('leave-entries', id)
 }
 
 export async function generateSpecialDaysYear(year, overwriteExisting = false) {

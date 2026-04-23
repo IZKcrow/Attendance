@@ -9,11 +9,13 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState(null)
   const [link, setLink] = React.useState(null)
+  const [message, setMessage] = React.useState(null)
 
   const submit = async (e) => {
     e.preventDefault()
     setError(null)
     setLink(null)
+    setMessage(null)
 
     const em = email.trim().toLowerCase()
     if (!em || !em.includes('@')) return setError('Enter a valid email.')
@@ -22,15 +24,34 @@ export default function ForgotPasswordPage() {
     try {
       const res = await api.forgotPassword(em)
       const resetPath = res?.resetPath
-      const url = resetPath ? `${window.location.origin}${resetPath}` : null
-      if (!url) {
-        setLink('If the email exists, a reset link was generated.')
-        return
+      const resetUrl = resetPath && typeof window !== 'undefined'
+        ? `${window.location.origin}${resetPath}`
+        : null
+
+      if (resetUrl) {
+        try {
+          await navigator.clipboard.writeText(resetUrl)
+          if (res?.emailSent) {
+            setMessage('Password reset email sent. Backup reset link copied to clipboard.')
+          } else if (res?.emailError) {
+            setMessage(`Reset link created, but email failed: ${res.emailError}`)
+          } else {
+            setMessage('Reset link copied to clipboard.')
+          }
+        } catch (_) {
+          if (res?.emailSent) {
+            setMessage('Password reset email sent. Backup reset link logged to console.')
+          } else if (res?.emailError) {
+            setMessage(`Reset link created, but email failed: ${res.emailError}`)
+          } else {
+            setMessage('Reset link created. Copy it from the page or console.')
+          }
+        }
+        console.log('Password reset link:', resetUrl)
+        setLink(resetUrl)
+      } else {
+        setMessage('If the email exists, a password reset email has been sent.')
       }
-      setLink(url)
-      try {
-        await navigator.clipboard.writeText(url)
-      } catch (_) {}
     } catch (err) {
       setError(err?.message || String(err))
     } finally {
@@ -88,6 +109,12 @@ export default function ForgotPasswordPage() {
           </div>
         )}
 
+        {message && (
+          <div style={{ color: '#e2ebff', marginBottom: 10, fontWeight: 700, fontSize: 13, wordBreak: 'break-word' }}>
+            {message}
+          </div>
+        )}
+
         {link && (
           <div style={{ color: '#e2ebff', marginBottom: 10, fontWeight: 700, fontSize: 13, wordBreak: 'break-all' }}>
             {link.startsWith('http') ? (
@@ -125,7 +152,7 @@ export default function ForgotPasswordPage() {
               ':hover': { backgroundColor: 'var(--primary-dark)' }
             }}
           >
-            {loading ? 'Working...' : 'Generate Reset Link'}
+            {loading ? 'Working...' : 'Send Reset Email'}
           </Button>
         </form>
 

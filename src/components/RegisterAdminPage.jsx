@@ -3,8 +3,6 @@ import { Button } from '@mui/material'
 import DarkVeil from './ui/DarkVeil'
 import * as api from '../api'
 
-const REGISTER_PATH = '/register-admin'
-
 function normalizePath(path) {
   if (!path) return '/'
   const cleaned = path.replace(/\/+$/, '')
@@ -22,21 +20,24 @@ function replacePath(path) {
 export default function RegisterAdminPage({ onSuccess }) {
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
   const token = (params.get('token') || '').trim()
+  const invitedEmail = (params.get('email') || '').trim()
 
   const [hasAdmin, setHasAdmin] = React.useState(null)
-  const [email, setEmail] = React.useState(() => (params.get('email') || 'eronreimasculino@gmail.com').trim())
+  const [email, setEmail] = React.useState(() => invitedEmail)
   const [password, setPassword] = React.useState('')
   const [confirm, setConfirm] = React.useState('')
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState(null)
 
   React.useEffect(() => {
+    if (token) return undefined
+
     let mounted = true
     api.fetchBootstrapStatus()
       .then((r) => { if (mounted) setHasAdmin(!!r?.hasAdmin) })
       .catch(() => { if (mounted) setHasAdmin(false) })
     return () => { mounted = false }
-  }, [])
+  }, [token])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -67,6 +68,10 @@ export default function RegisterAdminPage({ onSuccess }) {
   }
 
   const blocked = !token && hasAdmin === true
+  const title = token ? 'Accept Admin Invitation' : 'Set Up Admin'
+  const description = token
+    ? 'Use this invite token to create your admin account locally. Pasted invitation links work even when email sending is disabled.'
+    : 'Create the first admin account for this local installation.'
 
   return (
     <div
@@ -109,8 +114,12 @@ export default function RegisterAdminPage({ onSuccess }) {
         }}
       >
         <h3 style={{ marginTop: 0, color: '#f8fbff', textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
-          {token ? 'Register Admin' : 'Set Up Admin'}
+          {title}
         </h3>
+
+        <p style={{ fontSize: 12, lineHeight: 1.55, color: '#e2ebff', marginTop: 0, marginBottom: 12, textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
+          {description}
+        </p>
 
         {blocked && (
           <div role="alert" style={{ color: '#ffd8d8', marginBottom: 10, fontWeight: 700 }}>
@@ -128,7 +137,7 @@ export default function RegisterAdminPage({ onSuccess }) {
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Admin email"
+            placeholder={token ? 'Invited admin email' : 'Admin email'}
             style={input}
             disabled={loading}
           />
@@ -162,12 +171,22 @@ export default function RegisterAdminPage({ onSuccess }) {
               ':hover': { backgroundColor: 'var(--primary-dark)' }
             }}
           >
-            {loading ? 'Working...' : (token ? 'Register' : 'Create Admin')}
+            {loading ? 'Working...' : (token ? 'Create Invited Admin' : 'Create Admin')}
           </Button>
         </form>
 
         <p style={{ fontSize: 12, color: '#e2ebff', marginBottom: 0, marginTop: 10, textShadow: '0 2px 10px rgba(0,0,0,0.45)' }}>
-          URL: {REGISTER_PATH}
+          <a
+            href="/login"
+            onClick={(e) => {
+              e.preventDefault()
+              replacePath('/login')
+              window.location.href = '/login'
+            }}
+            style={{ color: '#e2ebff', fontWeight: 800 }}
+          >
+            Back to login
+          </a>
         </p>
       </div>
     </div>

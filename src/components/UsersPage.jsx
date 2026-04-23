@@ -17,9 +17,11 @@ export default function UsersPage() {
   const [admins, setAdmins] = React.useState([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(null)
+  const [currentAdminEmail, setCurrentAdminEmail] = React.useState('')
 
   React.useEffect(() => {
     loadAdmins()
+    loadCurrentAdmin()
   }, [])
 
   const loadAdmins = async () => {
@@ -33,6 +35,15 @@ export default function UsersPage() {
       show(`Load failed: ${err.message || err}`, 'error')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadCurrentAdmin = async () => {
+    try {
+      const res = await api.fetchMe()
+      setCurrentAdminEmail(String(res?.user?.email || '').trim().toLowerCase())
+    } catch (_) {
+      setCurrentAdminEmail('')
     }
   }
 
@@ -50,17 +61,35 @@ export default function UsersPage() {
       if (url) {
         try {
           await navigator.clipboard.writeText(url)
-          show('Invitation link copied to clipboard.', 'success')
+          if (res?.emailSent) {
+            show('Invitation email sent. Backup link copied to clipboard.', 'success')
+          } else if (res?.emailError) {
+            show(`Invitation created, but email failed: ${res.emailError}`, 'warning')
+          } else {
+            show('Invitation link copied to clipboard.', 'success')
+          }
         } catch (_) {
-          show('Invitation created. Copy from console (clipboard blocked).', 'info')
+          if (res?.emailSent) {
+            show('Invitation email sent. Backup link logged to console.', 'info')
+          } else if (res?.emailError) {
+            show(`Invitation created, but email failed: ${res.emailError}`, 'warning')
+          } else {
+            show('Invitation created. Copy from console (clipboard blocked).', 'info')
+          }
         }
         console.log('Admin invitation link:', url)
       } else {
-        show('Invitation created.', 'success')
+        show(res?.emailSent ? 'Invitation email sent.' : 'Invitation created.', 'success')
       }
     } catch (err) {
       show(`Invite failed: ${err.message || err}`, 'error')
     }
+  }
+
+  const deleteAdmin = async (id) => {
+    await api.deleteAdminUser(id)
+    show('Admin account removed.', 'success')
+    await loadAdmins()
   }
 
   return (
@@ -87,11 +116,16 @@ export default function UsersPage() {
         data={admins}
         loading={loading}
         error={error}
-        primaryKeyField="Email"
-        readOnly={true}
+        primaryKeyField="UserID"
+        readOnly={false}
         onAdd={() => {}}
         onEdit={() => {}}
-        onDelete={() => {}}
+        onDelete={deleteAdmin}
+        allowAdd={false}
+        allowEdit={false}
+        allowDelete={true}
+        showRowDelete={true}
+        canDeleteRow={(row) => String(row?.Email || row?.email || '').trim().toLowerCase() !== currentAdminEmail}
         renderRow={(row) => (
           <>
             <TableCell>{row.Email || row.email}</TableCell>
@@ -99,6 +133,7 @@ export default function UsersPage() {
             <TableCell>{fmtDateTime(row.LastLoginAt || row.lastLoginAt)}</TableCell>
           </>
         )}
+        useDeleteDialog={true}
       />
     </>
   )

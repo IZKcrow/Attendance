@@ -86,7 +86,134 @@ function computeDutyHours(row) {
     clampSegment(row.MorningTimeIn, row.MorningTimeOut, row.RequiredMorningIn, row.RequiredMorningOut) +
     clampSegment(row.AfternoonTimeIn, row.AfternoonTimeOut, row.RequiredAfternoonIn, row.RequiredAfternoonOut)
 
-  return formatMinutesAsHoursMins(total)
+  const actualTotal =
+    computeActualSegmentMinutes(row.MorningTimeIn, row.MorningTimeOut) +
+    computeActualSegmentMinutes(row.AfternoonTimeIn, row.AfternoonTimeOut)
+
+  const specialDayType = String(row.SpecialDayType || '').trim().toUpperCase()
+  if (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') {
+    const approvedOtMinutes = computeApprovedOvertimeMinutesForRow(row)
+    return formatMinutesAsHoursMins(Math.min(actualTotal, approvedOtMinutes))
+  }
+
+  const regularMinutes = (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') ? 0 : total
+  const actualExtraMinutes = Math.max(0, actualTotal - regularMinutes)
+  const approvedOtMinutes = computeApprovedOvertimeMinutesForRow(row)
+  const payableOtMinutes = Math.min(actualExtraMinutes, approvedOtMinutes)
+
+  return formatMinutesAsHoursMins(regularMinutes + payableOtMinutes)
+}
+
+function computeActualSegmentMinutes(actualIn, actualOut) {
+  const aIn = toMinutes(actualIn)
+  const aOut = toMinutes(actualOut)
+  if (aIn == null || aOut == null || aOut <= aIn) return 0
+  return Math.max(0, aOut - aIn)
+}
+
+function computeOverlapMinutes(actualIn, actualOut, allowedStart, allowedEnd) {
+  const aIn = toMinutes(actualIn)
+  const aOut = toMinutes(actualOut)
+  const wIn = toMinutes(allowedStart)
+  const wOut = toMinutes(allowedEnd)
+
+  if (aIn == null || aOut == null || aOut <= aIn) return 0
+  if (wIn == null || wOut == null || wOut <= wIn) return 0
+
+  const start = Math.max(aIn, wIn)
+  const end = Math.min(aOut, wOut)
+  return Math.max(0, end - start)
+}
+
+function toInterval(start, end) {
+  const s = toMinutes(start)
+  const e = toMinutes(end)
+  if (s == null || e == null || e <= s) return null
+  return { start: s, end: e }
+}
+
+function intersectIntervals(a, b) {
+  if (!a || !b) return null
+  const start = Math.max(a.start, b.start)
+  const end = Math.min(a.end, b.end)
+  if (end <= start) return null
+  return { start, end }
+}
+
+function subtractInterval(base, blocker) {
+  if (!base) return []
+  if (!blocker) return [base]
+
+  const overlap = intersectIntervals(base, blocker)
+  if (!overlap) return [base]
+
+  const next = []
+  if (base.start < overlap.start) next.push({ start: base.start, end: overlap.start })
+  if (overlap.end < base.end) next.push({ start: overlap.end, end: base.end })
+  return next
+}
+
+function getActualWorkIntervals(row) {
+  return [
+    toInterval(row.MorningTimeIn, row.MorningTimeOut),
+    toInterval(row.AfternoonTimeIn, row.AfternoonTimeOut)
+  ].filter(Boolean)
+}
+
+function getRequiredScheduleIntervals(row) {
+  const specialDayType = String(row.SpecialDayType || '').trim().toUpperCase()
+  if (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') return []
+
+  return [
+    toInterval(row.RequiredMorningIn, row.RequiredMorningOut),
+    toInterval(row.RequiredAfternoonIn, row.RequiredAfternoonOut)
+  ].filter(Boolean)
+}
+
+function getActualOvertimeIntervals(row) {
+  const actualIntervals = getActualWorkIntervals(row)
+  const scheduleIntervals = getRequiredScheduleIntervals(row)
+
+  return actualIntervals.flatMap((actualInterval) => {
+    let pieces = [actualInterval]
+    for (const scheduleInterval of scheduleIntervals) {
+      pieces = pieces.flatMap((piece) => subtractInterval(piece, scheduleInterval))
+    }
+    return pieces
+  })
+}
+
+function sumIntervalOverlapMinutes(intervals, windowInterval) {
+  return intervals.reduce((sum, interval) => {
+    const overlap = intersectIntervals(interval, windowInterval)
+    if (!overlap) return sum
+    return sum + (overlap.end - overlap.start)
+  }, 0)
+}
+
+function computeApprovedOvertimeMinutesForRow(row) {
+  const entries = Array.isArray(row.__ApprovedOvertimeEntries) ? row.__ApprovedOvertimeEntries : []
+  if (!entries.length) {
+    const fallback = Number(row.__ApprovedOvertimeMinutes)
+    return Number.isFinite(fallback) ? Math.max(0, Math.round(fallback)) : 0
+  }
+
+  const overtimeIntervals = getActualOvertimeIntervals(row)
+
+  return entries.reduce((sum, entry) => {
+    const approvedMinutes = Number(entry?.ApprovedMinutes)
+    if (!Number.isFinite(approvedMinutes) || approvedMinutes <= 0) return sum
+
+    const startTime = entry?.StartTime || ''
+    const endTime = entry?.EndTime || ''
+    if (startTime && endTime) {
+      const windowInterval = toInterval(startTime, endTime)
+      const withinWindow = sumIntervalOverlapMinutes(overtimeIntervals, windowInterval)
+      return sum + Math.min(Math.round(approvedMinutes), withinWindow)
+    }
+
+    return sum + Math.round(approvedMinutes)
+  }, 0)
 }
 
 function getRangeDate(kind, anchorDateStr = null) {
@@ -155,46 +282,91 @@ export default function AttendanceReportPage() {
     try {
       setLoading(true)
       let data = []
+      let overtimeEntries = []
       switch (range) {
         case 'today':
           if (dataSource === 'RAW') {
             const today = toDateInputValue(new Date())
-            data = await api.fetchAttendanceRawByRange(today, today)
+            ;[data, overtimeEntries] = await Promise.all([
+              api.fetchAttendanceRawByRange(today, today),
+              api.fetchOvertimeEntries({ from: today, to: today })
+            ])
           } else {
-            data = await api.fetchAttendanceToday()
+            const today = toDateInputValue(new Date())
+            ;[data, overtimeEntries] = await Promise.all([
+              api.fetchAttendanceToday(),
+              api.fetchOvertimeEntries({ from: today, to: today })
+            ])
           }
           break
         case 'week': {
           const r = getRangeDate('week', weekAnchor)
-          data = dataSource === 'RAW'
-            ? await api.fetchAttendanceRawByRange(r.from, r.to)
-            : await api.fetchAttendanceByRange(r.from, r.to)
+          ;[data, overtimeEntries] = await Promise.all([
+            dataSource === 'RAW'
+              ? api.fetchAttendanceRawByRange(r.from, r.to)
+              : api.fetchAttendanceByRange(r.from, r.to),
+            api.fetchOvertimeEntries({ from: r.from, to: r.to })
+          ])
           break
         }
         case 'month': {
           const r = getRangeDate('month', monthAnchor)
-          data = dataSource === 'RAW'
-            ? await api.fetchAttendanceRawByRange(r.from, r.to)
-            : await api.fetchAttendanceByRange(r.from, r.to)
+          ;[data, overtimeEntries] = await Promise.all([
+            dataSource === 'RAW'
+              ? api.fetchAttendanceRawByRange(r.from, r.to)
+              : api.fetchAttendanceByRange(r.from, r.to),
+            api.fetchOvertimeEntries({ from: r.from, to: r.to })
+          ])
           break
         }
         case 'year': {
           const r = getRangeDate('year', `${yearAnchor}-01-01`)
-          data = dataSource === 'RAW'
-            ? await api.fetchAttendanceRawByRange(r.from, r.to)
-            : await api.fetchAttendanceByRange(r.from, r.to)
+          ;[data, overtimeEntries] = await Promise.all([
+            dataSource === 'RAW'
+              ? api.fetchAttendanceRawByRange(r.from, r.to)
+              : api.fetchAttendanceByRange(r.from, r.to),
+            api.fetchOvertimeEntries({ from: r.from, to: r.to })
+          ])
           break
         }
         case 'custom':
-          data = dataSource === 'RAW'
-            ? await api.fetchAttendanceRawByRange(from, to)
-            : await api.fetchAttendanceByRange(from, to)
+          ;[data, overtimeEntries] = await Promise.all([
+            dataSource === 'RAW'
+              ? api.fetchAttendanceRawByRange(from, to)
+              : api.fetchAttendanceByRange(from, to),
+            api.fetchOvertimeEntries({ from, to })
+          ])
           break
         default:
-          data = dataSource === 'RAW'
-            ? await api.fetchAttendanceRawByRange(from, to)
-            : await api.fetchAttendanceToday()
+          ;[data, overtimeEntries] = await Promise.all([
+            dataSource === 'RAW'
+              ? api.fetchAttendanceRawByRange(from, to)
+              : api.fetchAttendanceToday(),
+            api.fetchOvertimeEntries({ from, to })
+          ])
       }
+      const overtimeByKey = new Map()
+      for (const entry of Array.isArray(overtimeEntries) ? overtimeEntries : []) {
+        const employeeId = String(entry?.EmployeeID || '')
+        const date = fmtDate(entry?.OvertimeDate)
+        if (!employeeId || date === '-') continue
+
+        const explicitMinutes = entry?.ApprovedMinutes
+        const approvedMinutes = explicitMinutes != null && explicitMinutes !== ''
+          ? Number(explicitMinutes)
+          : (entry?.ApprovedHours != null && entry?.ApprovedHours !== '' ? Number(entry.ApprovedHours) * 60 : 0)
+
+        if (!Number.isFinite(approvedMinutes) || approvedMinutes <= 0) continue
+        const key = `${employeeId}:${date}`
+        const bucket = overtimeByKey.get(key) || []
+        bucket.push({
+          StartTime: entry?.StartTime || '',
+          EndTime: entry?.EndTime || '',
+          ApprovedMinutes: Math.round(approvedMinutes)
+        })
+        overtimeByKey.set(key, bucket)
+      }
+
       const arr = Array.isArray(data) ? data : []
       const normalized = arr.map((rec) => {
         const candidates = [
@@ -229,7 +401,15 @@ export default function AttendanceReportPage() {
           !rec.AfternoonTimeOut
         let status = (rec.AttendanceSummary || rec.Status || '').trim()
         if (!status && emptyTimes) status = 'Absent'
-        return { ...rec, __ShiftResolved: shift, AttendanceSummary: status }
+        const key = `${String(rec.EmployeeID || '')}:${fmtDate(rec.AttendanceDate)}`
+        const overtimeEntryList = overtimeByKey.get(key) || []
+        return {
+          ...rec,
+          __ShiftResolved: shift,
+          __ApprovedOvertimeEntries: overtimeEntryList,
+          __ApprovedOvertimeMinutes: overtimeEntryList.reduce((sum, entry) => sum + Number(entry.ApprovedMinutes || 0), 0),
+          AttendanceSummary: status
+        }
       })
       setRecords(normalized)
       setError(null)

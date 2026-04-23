@@ -21,8 +21,10 @@ import SpecialDaysPage from './SpecialDaysPage'
 import DevicesPage from './DevicesPage'
 import OverviewDashboard from './OverviewDashboard'
 import AttendanceReportPage from './AttendanceReportPage'
+import OvertimeEntriesPage from './OvertimeEntriesPage'
+import LeaveEntriesPage from './LeaveEntriesPage'
 
-import bg2 from '../styles/bg2.png'
+import bg3 from '../styles/bg3.png'
 
 const PAGE_TO_PATH = {
   overview: '/dashboard',
@@ -35,6 +37,8 @@ const PAGE_TO_PATH = {
   'attendance-report': '/attendance-report',
   'device-attendance-events': '/imported-logs',
   reports: '/reports',
+  overtime: '/overtime',
+  leave: '/leave',
   'special-days': '/special-days',
   'audit-logs': '/audit-logs'
 }
@@ -42,6 +46,23 @@ const PAGE_TO_PATH = {
 const PATH_TO_PAGE = Object.fromEntries(
   Object.entries(PAGE_TO_PATH).map(([page, path]) => [path, page])
 )
+
+const PAGE_TITLES = {
+  overview: 'Dashboard',
+  employees: 'Employees',
+  users: 'Users',
+  devices: 'Devices',
+  'schedule-details': 'Schedule Details',
+  schedule: 'Scheduler',
+  attendance: 'Attendance Records',
+  'attendance-report': 'Attendance Report',
+  'device-attendance-events': 'Imported Device Logs',
+  reports: 'Generate Report',
+  overtime: 'Approved Overtime',
+  leave: 'Approved Leave',
+  'special-days': 'Special Days',
+  'audit-logs': 'Audit Logs'
+}
 
 const normalizePath = (path) => {
   if (!path) return '/'
@@ -115,6 +136,10 @@ export default function Dashboard({ onLogout }) {
         return <DeviceAttendanceEventsPage />
       case 'reports':
         return <GenerateReportPage />
+      case 'overtime':
+        return <OvertimeEntriesPage />
+      case 'leave':
+        return <LeaveEntriesPage />
       case 'special-days':
         return <SpecialDaysPage />
       case 'audit-logs':
@@ -126,11 +151,10 @@ export default function Dashboard({ onLogout }) {
     }
   }
 
-  const formatTitle = (text) =>
-    text
-      .split('-')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ')
+  const formatTitle = (text) => PAGE_TITLES[text] || text
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
 
   return (
     <Box
@@ -138,7 +162,7 @@ export default function Dashboard({ onLogout }) {
         display: 'flex',
         position: 'relative',
         minHeight: '100vh',
-        backgroundImage: `url(${bg2})`,
+        backgroundImage: `url(${bg3})`,
         backgroundRepeat: 'no-repeat',
         backgroundPosition: 'center',
         backgroundSize: '1500px',

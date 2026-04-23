@@ -295,9 +295,11 @@ export default function EmployeeTable() {
         show('Employee created successfully.', 'success')
       }
       setError(null)
+      return true
     } catch (err) {
       setError(err.message)
-      show(`Save failed: ${err.message || err}`, 'error')
+      show(`${err.message || err}`, 'error')
+      return false
     }
   }
 

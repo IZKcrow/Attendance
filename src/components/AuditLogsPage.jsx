@@ -142,7 +142,7 @@ export default function AuditLogsPage() {
       <div style={{ display: 'flex', gap: 16 }}>
         <div style={{ flex: 1 }}>
           <GenericDataTable
-            title="Logs"
+            title="Audit Logs"
             columns={['Admin', 'Action', 'Table', 'Created At']}
             data={filtered}
             loading={loading}

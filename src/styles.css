@@ -14,6 +14,36 @@
   --primary: #009063;
   --primary-dark: #006b4b;
   --primary-light: #00a877;
+
+  --status-on-time-bg: #dcfce7;
+  --status-on-time-fg: #166534;
+  --status-on-time-border: #86efac;
+  --status-on-time-row: rgba(34, 197, 94, 0.14);
+
+  --status-late-bg: #ffedd5;
+  --status-late-fg: #c2410c;
+  --status-late-border: #fdba74;
+  --status-late-row: rgba(249, 115, 22, 0.16);
+
+  --status-absent-bg: #fee2e2;
+  --status-absent-fg: #b91c1c;
+  --status-absent-border: #fca5a5;
+  --status-absent-row: rgba(239, 68, 68, 0.18);
+
+  --status-incomplete-bg: #e5e7eb;
+  --status-incomplete-fg: #4b5563;
+  --status-incomplete-border: #cbd5e1;
+  --status-incomplete-row: rgba(107, 114, 128, 0.18);
+
+  --status-halfday-bg: #dbeafe;
+  --status-halfday-fg: #1d4ed8;
+  --status-halfday-border: #93c5fd;
+  --status-halfday-row: rgba(59, 130, 246, 0.14);
+
+  --status-early-bg: #dcfce7;
+  --status-early-fg: #166534;
+  --status-early-border: #86efac;
+  --status-early-row: rgba(34, 197, 94, 0.14);
 }
 
 html,

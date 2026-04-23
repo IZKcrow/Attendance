@@ -26,25 +26,29 @@ const TOP_LEVEL = [
 
 const SCHEDULE_GROUP = [
   { id: 'schedule-details', label: 'Schedule Details', icon: EventNoteIcon },
-  { id: 'schedule', label: 'Scheduler', icon: EventNoteIcon }
+  { id: 'schedule', label: 'Scheduler', icon: EventNoteIcon },
+  { id: 'special-days', label: 'Special Days', icon: EventNoteIcon }
 ]
 
 const ATTENDANCE_GROUP = [
   { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
   { id: 'attendance-report', label: 'Attendance Report', icon: AssignmentIcon },
-  { id: 'reports', label: 'Generate Report', icon: AssignmentIcon }
+  { id: 'reports', label: 'Generate Report', icon: AssignmentIcon },
+  { id: 'overtime', label: 'Approved Overtime', icon: AssignmentIcon },
+  { id: 'leave', label: 'Approved Leave', icon: AssignmentIcon }
 ]
 
-const OTHER_ITEMS = [
-  { id: 'special-days', label: 'Special Days', icon: LogoutIcon },
-  { id: 'audit-logs', label: 'Logs', icon: HistoryIcon }
-]
+const OTHER_ITEMS = []
 
-const IMPORT_LOGS_ITEM = { id: 'device-attendance-events', label: 'Import Logs', icon: HistoryIcon }
+const LOGS_GROUP = [
+  { id: 'device-attendance-events', label: 'Imported Device Logs', icon: HistoryIcon },
+  { id: 'audit-logs', label: 'Audit Logs', icon: HistoryIcon }
+]
 
 export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, onLogout }) {
   const [openSchedule, setOpenSchedule] = React.useState(false)
   const [openAttendance, setOpenAttendance] = React.useState(false)
+  const [openLogs, setOpenLogs] = React.useState(false)
   const textColor = 'var(--sidebar-text, #f5f5f5)'
   const selectedSx = {
     '&.Mui-selected': { backgroundColor: 'rgba(255,255,255,0.15)' },
@@ -61,6 +65,24 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
     justifyContent: expanded ? 'flex-start' : 'center',
     ...selectedSx
   }
+
+  React.useEffect(() => {
+    if (SCHEDULE_GROUP.some((item) => item.id === activeMenu)) {
+      setOpenSchedule(true)
+    }
+  }, [activeMenu])
+
+  React.useEffect(() => {
+    if (ATTENDANCE_GROUP.some((item) => item.id === activeMenu)) {
+      setOpenAttendance(true)
+    }
+  }, [activeMenu])
+
+  React.useEffect(() => {
+    if (LOGS_GROUP.some((item) => item.id === activeMenu)) {
+      setOpenLogs(true)
+    }
+  }, [activeMenu])
 
   return (
     <Drawer
@@ -223,22 +245,40 @@ export default function Sidebar({ onMenuClick, expanded, activeMenu, onHover, on
         ))}
 
         <ListItem disablePadding>
-          <ListItemButton
-            onClick={() => onMenuClick(IMPORT_LOGS_ITEM.id)}
-            selected={activeMenu === IMPORT_LOGS_ITEM.id}
-            sx={topLevelButtonSx}
-          >
+          <ListItemButton onClick={() => setOpenLogs(o => !o)} sx={{ justifyContent: expanded ? 'flex-start' : 'center', py: 2 }}>
             <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 40 : 'auto' }}>
-              <IMPORT_LOGS_ITEM.icon />
+              <HistoryIcon />
             </ListItemIcon>
             {expanded && (
               <ListItemText
-                primary={IMPORT_LOGS_ITEM.label}
-                primaryTypographyProps={{ color: textColor, fontWeight: 600 }}
+                primary="Logs"
+                primaryTypographyProps={{ color: textColor, fontWeight: 700 }}
               />
             )}
+            {expanded && (openLogs ? <ExpandLess sx={{ color: textColor }} /> : <ExpandMore sx={{ color: textColor }} />)}
           </ListItemButton>
         </ListItem>
+        <Collapse in={expanded && openLogs} timeout="auto" unmountOnExit>
+          {LOGS_GROUP.map(item => (
+            <ListItem disablePadding key={item.id}>
+              <ListItemButton
+                onClick={() => onMenuClick(item.id)}
+                selected={activeMenu === item.id}
+                sx={childButtonSx}
+              >
+                <ListItemIcon sx={{ color: textColor, minWidth: expanded ? 32 : 'auto' }}>
+                  <item.icon fontSize="small" />
+                </ListItemIcon>
+                {expanded && (
+                  <ListItemText
+                    primary={item.label}
+                    primaryTypographyProps={{ color: textColor, fontWeight: 600 }}
+                  />
+                )}
+              </ListItemButton>
+            </ListItem>
+          ))}
+        </Collapse>
 
         {/* Logout */}
         <ListItem disablePadding>
