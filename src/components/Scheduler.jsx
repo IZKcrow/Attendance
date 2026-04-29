@@ -55,6 +55,7 @@ export default function Scheduler() {
   const [showRemoveDialog, setShowRemoveDialog] = useState(false)
   const [removeMode, setRemoveMode] = useState('shift')
   const [assignments, setAssignments] = useState([])
+  const [currentAssignments, setCurrentAssignments] = useState([])
   const assignmentsTimer = React.useRef(null)
   const EMPLOYEE_PANEL_LIMIT = 25
   const EMPLOYEE_RENDER_LIMIT = 250
@@ -78,6 +79,26 @@ export default function Scheduler() {
     return stripped || '0'
   }, [])
 
+  const refreshCurrentAssignments = React.useCallback(async (employeeRows) => {
+    const sourceRows = Array.isArray(employeeRows) ? employeeRows : employees
+    const employeeIDs = sourceRows.map((e) => e?.id).filter(Boolean)
+
+    if (!employeeIDs.length) {
+      setCurrentAssignments([])
+      return []
+    }
+
+    try {
+      const rows = await api.fetchEmployeeAssignments({ employeeIDs })
+      const safeRows = Array.isArray(rows) ? rows : []
+      setCurrentAssignments(safeRows)
+      return safeRows
+    } catch (_) {
+      setCurrentAssignments([])
+      return []
+    }
+  }, [employees])
+
   useEffect(() => {
     let mounted = true
     Promise.all([api.fetchEmployees(), api.fetchShiftDefinitions()])
@@ -91,6 +112,28 @@ export default function Scheduler() {
       })
     return () => { mounted = false }
   }, [])
+
+  useEffect(() => {
+    let mounted = true
+    const employeeIDs = Array.isArray(employees) ? employees.map((e) => e?.id).filter(Boolean) : []
+
+    if (!employeeIDs.length) {
+      setCurrentAssignments([])
+      return () => { mounted = false }
+    }
+
+    api.fetchEmployeeAssignments({ employeeIDs })
+      .then((rows) => {
+        if (!mounted) return
+        setCurrentAssignments(Array.isArray(rows) ? rows : [])
+      })
+      .catch(() => {
+        if (!mounted) return
+        setCurrentAssignments([])
+      })
+
+    return () => { mounted = false }
+  }, [employees])
 
   const selectedShift = useMemo(
     () => shifts.find((s) => String(s.ShiftID) === String(selectedShiftID)),
@@ -126,6 +169,16 @@ export default function Scheduler() {
     employees.forEach(e => { map[e.id] = e })
     return map
   }, [employees])
+
+  const currentAssignmentMap = useMemo(() => {
+    const map = new Map()
+    for (const row of currentAssignments || []) {
+      const employeeID = row?.EmployeeID
+      if (!employeeID || map.has(employeeID)) continue
+      map.set(employeeID, row)
+    }
+    return map
+  }, [currentAssignments])
 
   const selectedSet = useMemo(() => new Set(selectedEmployeeIDs), [selectedEmployeeIDs])
   const todayIso = useMemo(() => new Date().toISOString().split('T')[0], [])
@@ -183,15 +236,17 @@ export default function Scheduler() {
     }
 
     if (onlyUnassigned) {
-      list = list.filter((e) => !String(e?.assignedShift ?? '').trim())
+      list = list.filter((e) => !currentAssignmentMap.has(e?.id))
     }
 
     if (q) {
       list = list.filter((e) => {
+        const currentShiftName = currentAssignmentMap.get(e?.id)?.ShiftName
         const hay = [
           e?.EmployeeCode,
           e?.name,
           e?.department,
+          currentShiftName,
           e?.assignedShift,
           e?.biometricStaffCode,
           e?.biometricUserId
@@ -217,7 +272,7 @@ export default function Scheduler() {
     })
 
     return list
-  }, [employees, employeeQuery, employeeSort, onlyBiometricLinked, onlyUnassigned, normalizeNumericCode])
+  }, [employees, employeeQuery, employeeSort, onlyBiometricLinked, onlyUnassigned, normalizeNumericCode, currentAssignmentMap])
 
   const visibleEmployees = useMemo(() => filteredEmployees.slice(0, EMPLOYEE_RENDER_LIMIT), [filteredEmployees])
 
@@ -343,6 +398,7 @@ export default function Scheduler() {
         effectiveFrom: effectiveFrom || null,
         effectiveTo: effectiveTo || null
       })
+      await refreshCurrentAssignments()
       show('Shift assignment saved successfully.', 'success')
       setSelectedEmployeeIDs([])
     } catch (err) {
@@ -363,6 +419,7 @@ export default function Scheduler() {
         effectiveTo: endDate,
         mode: 'end'
       })
+      await refreshCurrentAssignments()
       show(`Assignments ended as of ${endDate}.`, 'info')
       setSelectedEmployeeIDs([])
     } catch (err) {
@@ -582,10 +639,11 @@ export default function Scheduler() {
                   {visibleEmployees.map((emp) => {
                     const id = emp?.id
                     const checked = id ? selectedSet.has(id) : false
+                    const currentAssignment = id ? currentAssignmentMap.get(id) : null
                     const primary = `${emp?.EmployeeCode || ''} ${emp?.name || ''}`.trim() || 'Unnamed'
                     const secondaryParts = [
                       emp?.department ? `Dept: ${emp.department}` : null,
-                      emp?.assignedShift ? `Shift: ${emp.assignedShift}` : null
+                      currentAssignment?.ShiftName ? `Shift: ${currentAssignment.ShiftName}` : null
                     ].filter(Boolean)
                     const secondary = secondaryParts.join(' • ')
 

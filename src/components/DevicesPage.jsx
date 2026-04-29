@@ -12,7 +12,6 @@ export default function DevicesPage() {
   const [statusMsg, setStatusMsg] = React.useState('')
   const [lastRefreshedAt, setLastRefreshedAt] = React.useState(null)
   const [selectedDeviceIds, setSelectedDeviceIds] = React.useState([])
-  const [syncJobs, setSyncJobs] = React.useState([])
   const importFileInputRef = React.useRef(null)
   const importTargetRef = React.useRef(null)
 
@@ -39,11 +38,9 @@ export default function DevicesPage() {
   React.useEffect(() => {
     let alive = true
     loadDevices({ silent: false, aliveRef: () => alive })
-    loadSyncJobs({ silent: true, aliveRef: () => alive })
 
     const intervalId = setInterval(() => {
       loadDevices({ silent: true, aliveRef: () => alive })
-      loadSyncJobs({ silent: true, aliveRef: () => alive })
     }, 15000)
 
     return () => {
@@ -68,17 +65,6 @@ export default function DevicesPage() {
       if (!aliveRef || aliveRef()) setError(err.message)
     } finally {
       if (!silent && (!aliveRef || aliveRef())) setLoading(false)
-    }
-  }
-
-  const loadSyncJobs = async ({ silent = false, aliveRef = null } = {}) => {
-    try {
-      const data = await api.fetchDeviceSyncJobs({ top: 25 })
-      if (!aliveRef || aliveRef()) {
-        setSyncJobs(Array.isArray(data) ? data : [])
-      }
-    } catch (_) {
-      if (!silent && (!aliveRef || aliveRef())) setSyncJobs([])
     }
   }
 
@@ -205,7 +191,6 @@ export default function DevicesPage() {
       const queued = result?.queued ?? 0
       const requested = result?.requested ?? selectedDeviceIds.length
       setStatusMsg(`Sync queued: ${queued}/${requested} device(s). Run the BiometricsBridge agent to process jobs.`)
-      loadSyncJobs({ silent: true })
     } catch (err) {
       setStatusMsg(`Sync queue failed: ${err.message || err}`)
     } finally {
@@ -303,40 +288,6 @@ export default function DevicesPage() {
           Clear Selection
         </button>
       </div>
-
-      {syncJobs.length > 0 && (
-        <div style={{ marginBottom: 12, background: 'rgba(15, 23, 42, 0.04)', border: '1px solid rgba(148,163,184,0.35)', borderRadius: 10, padding: 10 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 6 }}>
-            <div style={{ fontWeight: 700, color: '#0f172a' }}>Recent Sync Jobs</div>
-            <div style={{ fontSize: 12, opacity: 0.75 }}>Showing last {Math.min(syncJobs.length, 25)}</div>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr>
-                  {['Device', 'Status', 'Created', 'Started', 'Completed', 'Error'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid rgba(148,163,184,0.35)' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {syncJobs.slice(0, 25).map(j => (
-                  <tr key={j.JobID} style={{ borderBottom: '1px solid rgba(148,163,184,0.18)' }}>
-                    <td style={{ padding: '6px 8px', fontWeight: 700 }}>{j.DeviceCode || '-'}</td>
-                    <td style={{ padding: '6px 8px' }}>{j.Status || '-'}</td>
-                    <td style={{ padding: '6px 8px' }}>{j.CreatedAt ? new Date(j.CreatedAt).toLocaleString() : '-'}</td>
-                    <td style={{ padding: '6px 8px' }}>{j.StartedAt ? new Date(j.StartedAt).toLocaleString() : '-'}</td>
-                    <td style={{ padding: '6px 8px' }}>{j.CompletedAt ? new Date(j.CompletedAt).toLocaleString() : '-'}</td>
-                    <td style={{ padding: '6px 8px', maxWidth: 420, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={j.Error || ''}>
-                      {j.Error || ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       <GenericDataTable
         title="Devices"

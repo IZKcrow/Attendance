@@ -5,6 +5,7 @@ import ForgotPasswordPage from './components/ForgotPasswordPage'
 import LoginPage from './components/LoginPage'
 import RegisterAdminPage from './components/RegisterAdminPage'
 import ResetPasswordPage from './components/ResetPasswordPage'
+import { clearStoredAuthToken, getStoredAuthToken } from './authStorage'
 
 const LOGIN_PATH = '/login'
 const DASHBOARD_PATH = '/dashboard'
@@ -27,7 +28,7 @@ const replacePath = (path) => {
 }
 
 export default function App() {
-  const [token, setToken] = useState(() => localStorage.getItem('authToken'))
+  const [token, setToken] = useState(() => getStoredAuthToken())
   const [path, setPath] = useState(() =>
     typeof window === 'undefined' ? '/' : normalizePath(window.location.pathname)
   )
@@ -39,12 +40,12 @@ export default function App() {
   }
 
   const handleLoginSuccess = (data) => {
-    setToken(data?.token || localStorage.getItem('authToken'))
+    setToken(data?.token || getStoredAuthToken())
     navigate(DASHBOARD_PATH)
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('authToken')
+    clearStoredAuthToken()
     setToken(null)
     navigate(LOGIN_PATH)
   }

@@ -59,7 +59,7 @@ function toDateInputValue(value = new Date()) {
 
 function emptyForm() {
   return {
-    EmployeeID: '',
+    EmployeeIDs: [],
     OvertimeDate: toDateInputValue(),
     StartTime: '',
     EndTime: '',
@@ -113,14 +113,19 @@ export default function OvertimeEntriesPage() {
     setForm((prev) => ({ ...prev, [field]: event.target.value }))
   }
 
-  const selectedEmployee = React.useMemo(
-    () => employees.find((employee) => employee.id === form.EmployeeID) || null,
-    [employees, form.EmployeeID]
+  const selectedEmployees = React.useMemo(
+    () => {
+      const selectedIds = new Set(form.EmployeeIDs || [])
+      return employees.filter((employee) => selectedIds.has(employee.id))
+    },
+    [employees, form.EmployeeIDs]
   )
 
   const handleSubmit = async () => {
-    if (!form.EmployeeID) {
-      show('Please choose an employee.', 'warning')
+    const employeeIds = Array.isArray(form.EmployeeIDs) ? form.EmployeeIDs.filter(Boolean) : []
+
+    if (!employeeIds.length) {
+      show(editingId ? 'Please choose an employee.' : 'Please choose at least one employee.', 'warning')
       return
     }
     if (!form.OvertimeDate) {
@@ -130,22 +135,27 @@ export default function OvertimeEntriesPage() {
 
     setSaving(true)
     try {
-      const payload = {
-        EmployeeID: form.EmployeeID,
+      const buildPayload = (employeeId) => ({
+        EmployeeID: employeeId,
         OvertimeDate: form.OvertimeDate,
         StartTime: form.StartTime || null,
         EndTime: form.EndTime || null,
         ApprovedHours: form.ApprovedHours === '' ? null : form.ApprovedHours,
         OvertimeType: form.OvertimeType || 'REGULAR',
         Reason: form.Reason || null
-      }
+      })
 
       if (editingId) {
-        await api.updateOvertimeEntry(editingId, payload)
+        await api.updateOvertimeEntry(editingId, buildPayload(employeeIds[0]))
         show('Overtime entry updated.', 'success')
       } else {
-        await api.createOvertimeEntry(payload)
-        show('Overtime entry created.', 'success')
+        await Promise.all(employeeIds.map((employeeId) => api.createOvertimeEntry(buildPayload(employeeId))))
+        show(
+          employeeIds.length === 1
+            ? 'Overtime entry created.'
+            : `Overtime entries created for ${employeeIds.length} employees.`,
+          'success'
+        )
       }
 
       resetForm()
@@ -167,7 +177,7 @@ export default function OvertimeEntriesPage() {
   const handleRowClick = (row) => {
     setEditingId(row.OvertimeEntryID)
     setForm({
-      EmployeeID: row.EmployeeID || '',
+      EmployeeIDs: row.EmployeeID ? [row.EmployeeID] : [],
       OvertimeDate: row.OvertimeDate || toDateInputValue(),
       StartTime: row.StartTime || '',
       EndTime: row.EndTime || '',
@@ -189,6 +199,7 @@ export default function OvertimeEntriesPage() {
             </Typography>
             <Typography variant="body2" sx={{ color: 'var(--muted)' }}>
               Admins can encode only approved overtime so reports do not guess from raw punches.
+              {!editingId ? ' You can assign the same overtime details to multiple employees in one save.' : ''}
             </Typography>
           </Box>
           <Typography variant="body2" sx={{ color: editingId ? 'var(--primary)' : 'var(--muted)', fontWeight: 700 }}>
@@ -198,10 +209,14 @@ export default function OvertimeEntriesPage() {
 
         <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' } }}>
           <Autocomplete
+            multiple={!editingId}
             options={employees}
-            value={selectedEmployee}
+            value={editingId ? selectedEmployees[0] || null : selectedEmployees}
             onChange={(_event, value) => {
-              setForm((prev) => ({ ...prev, EmployeeID: value?.id || '' }))
+              setForm((prev) => ({
+                ...prev,
+                EmployeeIDs: Array.isArray(value) ? value.map((employee) => employee.id) : value?.id ? [value.id] : []
+              }))
             }}
             getOptionLabel={(option) => `${option?.name || ''} (${option?.employeeCode || option?.EmployeeCode || 'No code'})`}
             isOptionEqualToValue={(option, value) => option.id === value.id}
@@ -209,8 +224,12 @@ export default function OvertimeEntriesPage() {
               <TextField
                 {...params}
                 size="small"
-                label="Employee"
-                helperText="Search by employee name or staff code."
+                label={editingId ? 'Employee' : 'Employees'}
+                helperText={
+                  editingId
+                    ? 'Edit mode updates the selected overtime entry only.'
+                    : 'Search by employee name or staff code. Select one or many.'
+                }
                 sx={inputSx}
               />
             )}

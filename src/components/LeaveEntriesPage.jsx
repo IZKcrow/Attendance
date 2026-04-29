@@ -59,7 +59,7 @@ function toDateInputValue(value = new Date()) {
 
 function emptyForm() {
   return {
-    EmployeeID: '',
+    EmployeeIDs: [],
     LeaveStartDate: toDateInputValue(),
     LeaveEndDate: toDateInputValue(),
     LeaveType: 'LEAVE',
@@ -122,14 +122,19 @@ export default function LeaveEntriesPage() {
     })
   }
 
-  const selectedEmployee = React.useMemo(
-    () => employees.find((employee) => employee.id === form.EmployeeID) || null,
-    [employees, form.EmployeeID]
+  const selectedEmployees = React.useMemo(
+    () => {
+      const selectedIds = new Set(form.EmployeeIDs || [])
+      return employees.filter((employee) => selectedIds.has(employee.id))
+    },
+    [employees, form.EmployeeIDs]
   )
 
   const handleSubmit = async () => {
-    if (!form.EmployeeID) {
-      show('Please choose an employee.', 'warning')
+    const employeeIds = Array.isArray(form.EmployeeIDs) ? form.EmployeeIDs.filter(Boolean) : []
+
+    if (!employeeIds.length) {
+      show(editingId ? 'Please choose an employee.' : 'Please choose at least one employee.', 'warning')
       return
     }
     if (!form.LeaveStartDate || !form.LeaveEndDate) {
@@ -139,8 +144,8 @@ export default function LeaveEntriesPage() {
 
     setSaving(true)
     try {
-      const payload = {
-        EmployeeID: form.EmployeeID,
+      const buildPayload = (employeeId) => ({
+        EmployeeID: employeeId,
         LeaveStartDate: form.LeaveStartDate,
         LeaveEndDate: form.LeaveEndDate,
         LeaveType: form.LeaveType || 'LEAVE',
@@ -149,14 +154,19 @@ export default function LeaveEntriesPage() {
         EndTime: form.EndTime || null,
         ApprovedHours: form.ApprovedHours === '' ? null : form.ApprovedHours,
         Reason: form.Reason || null
-      }
+      })
 
       if (editingId) {
-        await api.updateLeaveEntry(editingId, payload)
+        await api.updateLeaveEntry(editingId, buildPayload(employeeIds[0]))
         show('Leave entry updated.', 'success')
       } else {
-        await api.createLeaveEntry(payload)
-        show('Leave entry created.', 'success')
+        await Promise.all(employeeIds.map((employeeId) => api.createLeaveEntry(buildPayload(employeeId))))
+        show(
+          employeeIds.length === 1
+            ? 'Leave entry created.'
+            : `Leave entries created for ${employeeIds.length} employees.`,
+          'success'
+        )
       }
 
       resetForm()
@@ -178,7 +188,7 @@ export default function LeaveEntriesPage() {
   const handleRowClick = (row) => {
     setEditingId(row.LeaveEntryID)
     setForm({
-      EmployeeID: row.EmployeeID || '',
+      EmployeeIDs: row.EmployeeID ? [row.EmployeeID] : [],
       LeaveStartDate: row.LeaveStartDate || toDateInputValue(),
       LeaveEndDate: row.LeaveEndDate || row.LeaveStartDate || toDateInputValue(),
       LeaveType: row.LeaveType || 'LEAVE',
@@ -202,6 +212,7 @@ export default function LeaveEntriesPage() {
             </Typography>
             <Typography variant="body2" sx={{ color: 'var(--muted)' }}>
               Encode approved leave here so absences and leave hours are based on admin records, not guesses.
+              {!editingId ? ' You can assign the same leave details to multiple employees in one save.' : ''}
             </Typography>
           </Box>
           <Typography variant="body2" sx={{ color: editingId ? 'var(--primary)' : 'var(--muted)', fontWeight: 700 }}>
@@ -211,10 +222,14 @@ export default function LeaveEntriesPage() {
 
         <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' } }}>
           <Autocomplete
+            multiple={!editingId}
             options={employees}
-            value={selectedEmployee}
+            value={editingId ? selectedEmployees[0] || null : selectedEmployees}
             onChange={(_event, value) => {
-              setForm((prev) => ({ ...prev, EmployeeID: value?.id || '' }))
+              setForm((prev) => ({
+                ...prev,
+                EmployeeIDs: Array.isArray(value) ? value.map((employee) => employee.id) : value?.id ? [value.id] : []
+              }))
             }}
             getOptionLabel={(option) => `${option?.name || ''} (${option?.employeeCode || option?.EmployeeCode || 'No code'})`}
             isOptionEqualToValue={(option, value) => option.id === value.id}
@@ -222,8 +237,12 @@ export default function LeaveEntriesPage() {
               <TextField
                 {...params}
                 size="small"
-                label="Employee"
-                helperText="Search by employee name or staff code."
+                label={editingId ? 'Employee' : 'Employees'}
+                helperText={
+                  editingId
+                    ? 'Edit mode updates the selected leave entry only.'
+                    : 'Search by employee name or staff code. Select one or many.'
+                }
                 sx={inputSx}
               />
             )}

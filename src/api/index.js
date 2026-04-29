@@ -2,7 +2,7 @@
 
 function getAuthToken() {
   try {
-    return localStorage.getItem('authToken')
+    return sessionStorage.getItem('authToken')
   } catch (_) {
     return null
   }

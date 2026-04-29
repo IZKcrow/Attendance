@@ -2,6 +2,7 @@
 import { Button } from '@mui/material'
 import DarkVeil from './ui/DarkVeil'
 import * as api from '../api'
+import { setStoredAuthToken } from '../authStorage'
 
 function normalizePath(path) {
   if (!path) return '/'
@@ -55,7 +56,7 @@ export default function RegisterAdminPage({ onSuccess }) {
         : await api.setupAdmin(em, password)
 
       if (res?.token) {
-        localStorage.setItem('authToken', res.token)
+        setStoredAuthToken(res.token)
       }
 
       onSuccess?.(res)

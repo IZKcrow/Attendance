@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { fetchBootstrapStatus, login, setupAdmin } from '../api'
+import { setStoredAuthToken } from '../authStorage'
 import DarkVeil from './ui/DarkVeil'
 
 export default function LoginPage({ onSuccess }) {
@@ -50,7 +51,7 @@ export default function LoginPage({ onSuccess }) {
 
     if (isSetupMode) {
       if (!trimmedEmail.includes('@')) {
-        setError('Enter a valid admin email.')
+        setError('Enter a valid email.')
         return
       }
       if (password.length < 8) {
@@ -68,13 +69,13 @@ export default function LoginPage({ onSuccess }) {
 
       if (isSetupMode) {
         const data = await setupAdmin(trimmedEmail, password)
-        localStorage.setItem('authToken', data.token)
+        setStoredAuthToken(data.token)
         onSuccess?.(data)
         return
       }
 
       const data = await login(trimmedEmail, password)
-      localStorage.setItem('authToken', data.token)
+      setStoredAuthToken(data.token)
       onSuccess?.(data)
     } catch (err) {
       if (!isSetupMode && err?.status === 401) {

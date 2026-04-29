@@ -16,6 +16,7 @@ import {
 } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
+import ppcwdLogo from '../styles/ppcwdLogo.png'
 
 const reportStatusOptions = [
   { value: 'on-time', label: 'On-Time' },
@@ -99,6 +100,20 @@ function downloadBlob(filename, mimeType, content) {
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+function assetUrlToDataUri(url) {
+  return fetch(url)
+    .then((res) => {
+      if (!res.ok) throw new Error(`Failed to load asset: ${res.status}`)
+      return res.blob()
+    })
+    .then((blob) => new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => resolve(reader.result)
+      reader.onerror = () => reject(new Error('Failed to convert asset to data URL'))
+      reader.readAsDataURL(blob)
+    }))
 }
 
 function hhmmToMinutes(v) {
@@ -680,9 +695,10 @@ function filterSourceRows(sourceRows, selectedStatuses) {
   )
 }
 
-function buildHtmlDocument(headers, rows, title) {
+function buildHtmlDocument(headers, rows, title, logoSrc = '') {
   const safeHeaders = Array.isArray(headers) ? headers : []
   const safeRows = Array.isArray(rows) ? rows : []
+  const safeLogoSrc = logoSrc ? escapeHtml(logoSrc) : ''
 
   const table = `
     ${safeRows.length ? '' : '<p style="margin:8px 0 12px 0;color:#374151;">No data found for the selected date range.</p>'}
@@ -696,19 +712,42 @@ function buildHtmlDocument(headers, rows, title) {
     </table>
   `
 
+  const confirmationBlock = `
+    <div class="report-confirmation">
+      <div class="report-confirmed-by">Confirmed By:</div>
+      <div class="report-signature-line"></div>
+    </div>
+  `
+
   const style = `
     <style>
-      body{font-family:Arial, sans-serif; padding:16px;}
-      h2{margin:0 0 10px 0;}
+      body{font-family:Arial, sans-serif; padding:16px; color:#111827;}
+      .report-header{display:flex; align-items:center; gap:14px; margin:0 0 14px 0; padding-bottom:12px; border-bottom:2px solid #d1d5db;}
+      .report-logo{width:70px; height:70px; object-fit:contain; flex-shrzzink:0;}
+      .report-brand{display:flex; flex-direction:column; gap:3px;}
+      .report-company{font-size:18px; font-weight:800; line-height:1.2;}
+      .report-title{font-size:22px; font-weight:800; line-height:1.2;}
       table{border-collapse:collapse; width:100%;}
       th{background:#f3f4f6;}
       th,td{font-size:12px;}
-      @media print { body{padding:0;} h2{margin:0 0 8px 0;} }
+      .report-confirmation{width:280px; margin:56px 0 0 auto; text-align:left;}
+      .report-confirmed-by{font-size:13px; font-weight:700; margin-bottom:36px;}
+      .report-signature-line{border-top:1.5px solid #111827; width:100%;}
+      @media print { body{padding:0;} .report-header{margin:0 0 10px 0;} }
     </style>
   `
 
   const safeTitle = escapeHtml(title)
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>${safeTitle}</title>${style}</head><body><h2>${safeTitle}</h2>${table}</body></html>`
+  const reportHeader = `
+    <div class="report-header">
+      ${safeLogoSrc ? `<img class="report-logo" src="${safeLogoSrc}" alt="Puerto Princesa City Water District logo" />` : ''}
+      <div class="report-brand">
+        <div class="report-company">Puerto Princesa City Water District</div>
+        <div class="report-title">${safeTitle}</div>
+      </div>
+    </div>
+  `
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>${safeTitle}</title>${style}</head><body>${reportHeader}${table}${confirmationBlock}</body></html>`
 }
 
 function openPdfWindowNow() {
@@ -834,6 +873,7 @@ export default function GenerateReportPage() {
   const generate = async () => {
     let pdfWin = null
     const title = `${reportType === 'SUMMARY' ? 'Attendance Summary Report' : 'Attendance Detailed Report'} (${from} to ${to})`
+    let reportLogoSrc = ''
 
     if (format === 'PDF') {
       try {
@@ -849,6 +889,7 @@ export default function GenerateReportPage() {
 
     let reportRows = []
     try {
+      reportLogoSrc = await assetUrlToDataUri(ppcwdLogo).catch(() => '')
       const fetched = await fetchReportData()
       const filteredRows = filterSourceRows(fetched.attendanceRows, statusFilters)
       const overtimeByKey = buildOvertimeEntriesByKey(fetched.overtimeRows)
@@ -865,8 +906,8 @@ export default function GenerateReportPage() {
       setOvertimeEntries([])
       setLeaveEntries([])
       if (pdfWin) {
-        const html = buildHtmlDocument([], [], `${title} (Error)`)
-          .replace('<h2>', `<h2>${escapeHtml(title)}<br/><span style="font-size:12px;color:#b91c1c;font-weight:700;">${escapeHtml(msg)}</span><br/>`)
+        const html = buildHtmlDocument([], [], `${title} (Error)`, reportLogoSrc)
+          .replace('</div></div>', `<div style="font-size:12px;color:#b91c1c;font-weight:700;">${escapeHtml(msg)}</div></div></div>`)
         writePrintablePdf(pdfWin, html)
       }
       return
@@ -878,13 +919,13 @@ export default function GenerateReportPage() {
     const exportRows = reportRows.map((row) => previewColumnDefs.map((column) => row[column.key] ?? ''))
 
     if (format === 'PDF') {
-      const html = buildHtmlDocument(exportHeaders, exportRows, title)
+      const html = buildHtmlDocument(exportHeaders, exportRows, title, reportLogoSrc)
       writePrintablePdf(pdfWin, html)
       triggerPrintAndClose(pdfWin)
       return
     }
 
-    const html = buildHtmlDocument(exportHeaders, exportRows, title)
+    const html = buildHtmlDocument(exportHeaders, exportRows, title, reportLogoSrc)
     const filename = `${reportType === 'SUMMARY' ? 'Attendance_Summary_Report' : 'Attendance_Report'}_${from}_to_${to}.xls`
     downloadBlob(filename, 'application/vnd.ms-excel;charset=utf-8', html)
   }
@@ -900,7 +941,9 @@ export default function GenerateReportPage() {
           boxShadow: '0 10px 24px rgba(0,0,0,0.12)'
         }}
       >
-        <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>Generate Report</Typography>
+        <Typography variant="h6" sx={{ fontWeight: 800, mb: 1 }}>
+          Generate Report
+        </Typography>
         <Box sx={{ display: 'grid', gap: 1.5 }}>
           <Box
             sx={{

@@ -2,6 +2,7 @@
 import { Button } from '@mui/material'
 import DarkVeil from './ui/DarkVeil'
 import * as api from '../api'
+import { setStoredAuthToken } from '../authStorage'
 
 export default function ResetPasswordPage({ onSuccess }) {
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
@@ -24,7 +25,7 @@ export default function ResetPasswordPage({ onSuccess }) {
     try {
       const res = await api.resetPassword(token, password)
       if (res?.token) {
-        localStorage.setItem('authToken', res.token)
+        setStoredAuthToken(res.token)
       }
       onSuccess?.(res)
       window.location.href = '/dashboard'
