@@ -65,6 +65,11 @@ function formatMinutesAsHoursMins(totalMinutes) {
   return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ${String(mins).padStart(2, '0')} ${mins === 1 ? 'min' : 'mins'}`
 }
 
+function isNonWorkingDayType(value) {
+  const normalized = String(value || '').trim().toUpperCase()
+  return normalized === 'HOLIDAY' || normalized === 'REST_DAY' || normalized === 'SPECIAL_NON_WORKING'
+}
+
 function computeDutyHours(row) {
   // Company policy: no overtime credit for early IN / late OUT.
   // Work hours are clamped to the required shift window; late IN / early OUT deduct time.
@@ -91,12 +96,12 @@ function computeDutyHours(row) {
     computeActualSegmentMinutes(row.AfternoonTimeIn, row.AfternoonTimeOut)
 
   const specialDayType = String(row.SpecialDayType || '').trim().toUpperCase()
-  if (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') {
+  if (isNonWorkingDayType(specialDayType)) {
     const approvedOtMinutes = computeApprovedOvertimeMinutesForRow(row)
     return formatMinutesAsHoursMins(Math.min(actualTotal, approvedOtMinutes))
   }
 
-  const regularMinutes = (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') ? 0 : total
+  const regularMinutes = isNonWorkingDayType(specialDayType) ? 0 : total
   const actualExtraMinutes = Math.max(0, actualTotal - regularMinutes)
   const approvedOtMinutes = computeApprovedOvertimeMinutesForRow(row)
   const payableOtMinutes = Math.min(actualExtraMinutes, approvedOtMinutes)
@@ -162,7 +167,7 @@ function getActualWorkIntervals(row) {
 
 function getRequiredScheduleIntervals(row) {
   const specialDayType = String(row.SpecialDayType || '').trim().toUpperCase()
-  if (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') return []
+  if (isNonWorkingDayType(specialDayType)) return []
 
   return [
     toInterval(row.RequiredMorningIn, row.RequiredMorningOut),
@@ -478,6 +483,7 @@ export default function AttendanceReportPage() {
     { value: 'incomplete', label: 'Incomplete' },
     { value: 'half-day', label: 'Half-Day' },
     { value: 'holiday', label: 'Holiday' },
+    { value: 'special-day', label: 'Special Day' },
     { value: 'rest-day', label: 'Rest Day' }
   ]), [])
 
@@ -490,6 +496,7 @@ export default function AttendanceReportPage() {
     if (filterValue === 'incomplete') return s.includes('incomplete')
     if (filterValue === 'half-day') return s.includes('half')
     if (filterValue === 'holiday') return s.includes('holiday')
+    if (filterValue === 'special-day') return s.includes('special non-working')
     if (filterValue === 'rest-day') return s.includes('rest day') || s.includes('rest-day')
     return true
   }, [])

@@ -74,7 +74,7 @@ export async function login(username, password) {
   const res = await fetch(`${BASE}/auth/login`, {
     method: 'POST',
     headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ email: username, username, password })
+    body: JSON.stringify({ username, password })
   })
   return handleRes(res)
 }
@@ -83,20 +83,20 @@ export async function fetchBootstrapStatus() {
   return fetchAll('auth/bootstrap-status')
 }
 
-export async function setupAdmin(email, password) {
+export async function setupAdmin(username, email, password) {
   const res = await fetch(`${BASE}/auth/setup-admin`, {
     method: 'POST',
     headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify({ username, email, password })
   })
   return handleRes(res)
 }
 
-export async function registerAdminWithToken(token, email, password) {
+export async function registerAdminWithToken(token, username, email, password) {
   const res = await fetch(`${BASE}/auth/register-admin`, {
     method: 'POST',
     headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ token, email, password })
+    body: JSON.stringify({ token, username, email, password })
   })
   return handleRes(res)
 }
@@ -115,6 +115,15 @@ export async function deleteAdminUser(id) {
     throw buildApiError(res, text)
   }
   return res.json().catch(() => null)
+}
+
+export async function updateAdminUser(id, { username, email }) {
+  const res = await fetch(`${BASE}/auth/admin-users/${id}`, {
+    method: 'PUT',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ username, email })
+  })
+  return handleRes(res)
 }
 
 export async function createAdminInvitation(email, expiresHours = 24) {
@@ -143,7 +152,9 @@ export async function resetPassword(token, password) {
     body: JSON.stringify({ token, password })
   })
   return handleRes(res)
-}export async function fetchMe() {
+}
+
+export async function fetchMe() {
   return fetchAll('auth/me')
 }
 
@@ -231,14 +242,6 @@ export async function fetchAttendanceRawByRange(from, to) {
 
   return handleRes(res)
 }
-export async function recordAttendance(employeeCode, logType = 'MORNING_IN') {
-  const res = await fetch(`${BASE}/attendance/log`, {
-    method: 'POST',
-    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ employeeCode, logType })
-  })
-  return handleRes(res)
-}
 
 export async function faceScanAttendance({
   employeeCode,
@@ -274,10 +277,6 @@ async function deleteViaPost(endpoint, id) {
   return handleRes(res)
 }
 
-export async function createAttendanceRecord(data) {
-  return recordAttendance(data?.employeeCode || data?.EmployeeCode, data?.logType || 'MORNING_IN')
-}
-
 export async function updateAttendanceRecord(id, data) {
   const payload = {
     AttendanceDate: data?.AttendanceDate || data?.attendanceDate || null,
@@ -300,10 +299,6 @@ export async function updateAttendanceRecord(id, data) {
     })
   }
   return handleRes(res)
-}
-
-export async function deleteAttendanceRecord() {
-  throw new Error('Attendance delete is not supported in current backend.')
 }
 
 export async function fetchDevices() {

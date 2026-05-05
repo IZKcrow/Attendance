@@ -38,6 +38,62 @@ const inputSx = {
   '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
 }
 
+const dayTypeMeta = {
+  HOLIDAY: {
+    label: 'Regular Holiday',
+    bg: '#3f6b2a',
+    fg: '#ffffff'
+  },
+  SPECIAL_NON_WORKING: {
+    label: 'Special Non-Working',
+    bg: '#7faa5f',
+    fg: '#ffffff'
+  },
+  REST_DAY: {
+    label: 'Rest Day',
+    bg: '#6b7280',
+    fg: '#ffffff'
+  },
+  HALF_DAY_AM: {
+    label: 'Half Day AM',
+    bg: '#0ea5e9',
+    fg: '#ffffff'
+  },
+  HALF_DAY_PM: {
+    label: 'Half Day PM',
+    bg: '#0ea5e9',
+    fg: '#ffffff'
+  }
+}
+
+function getDayTypeMeta(dayType) {
+  const normalized = String(dayType || '').trim().toUpperCase()
+  return dayTypeMeta[normalized] || {
+    label: normalized || 'Unknown',
+    bg: '#374151',
+    fg: '#ffffff'
+  }
+}
+
+function renderDayTypeBadge(dayType) {
+  const meta = getDayTypeMeta(dayType)
+  return (
+    <span style={{
+      padding: '4px 10px',
+      borderRadius: 999,
+      background: meta.bg,
+      color: meta.fg,
+      fontWeight: 700,
+      fontSize: 13,
+      display: 'inline-block',
+      minWidth: 90,
+      textAlign: 'center'
+    }}>
+      {meta.label}
+    </span>
+  )
+}
+
 export default function SpecialDaysPage() {
   const { show, SnackbarComponent } = useSnackbar()
   const [days, setDays] = React.useState([])
@@ -98,7 +154,7 @@ export default function SpecialDaysPage() {
           onChange={(e) => setYear(e.target.value)}
           inputProps={{ min: 2000, max: 2100 }}
           sx={inputSx}
-          helperText="Generate common PH holidays (you can still add/edit manually)."
+          helperText="Generate common PH holidays, including Christian, Muslim, and civic dates (you can still add/edit manually)."
         />
         <Box sx={{ flexGrow: 1 }} />
         <Button
@@ -107,7 +163,7 @@ export default function SpecialDaysPage() {
           onClick={async () => {
             const y = Number(year)
             if (!Number.isInteger(y) || y < 2000 || y > 2100) {
-              show('Please enter a valid year (2000–2100).', 'warning')
+              show('Please enter a valid year (2000-2100).', 'warning')
               return
             }
             setGenerating(true)
@@ -123,7 +179,7 @@ export default function SpecialDaysPage() {
           }}
           sx={primaryBtnSx}
         >
-          {generating ? 'Generating…' : 'Generate Holidays'}
+          {generating ? 'Generating...' : 'Generate Holidays'}
         </Button>
       </Paper>
 
@@ -143,7 +199,7 @@ export default function SpecialDaysPage() {
         renderRow={(row) => (
           <>
             <TableCell>{row.SpecialDate}</TableCell>
-            <TableCell>{row.DayType}</TableCell>
+            <TableCell>{renderDayTypeBadge(row.DayType)}</TableCell>
             <TableCell>{row.Description}</TableCell>
           </>
         )}

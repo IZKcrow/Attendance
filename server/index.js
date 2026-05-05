@@ -420,6 +420,30 @@ function normalizeNumericCode(value) {
   return stripped || '0'
 }
 
+function normalizeBiometricIdentifierForComparison(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  if (/^\d+$/.test(raw)) return normalizeNumericCode(raw)
+  return raw.toLowerCase()
+}
+
+function biometricIdentifiersMatch(left, right) {
+  const a = normalizeBiometricIdentifierForComparison(left)
+  const b = normalizeBiometricIdentifierForComparison(right)
+  return !!a && !!b && a === b
+}
+
+function getBiometricConflictMessage(conflict) {
+  if (!conflict) return null
+  if (conflict.incomingField === 'Biometric Staff Code') {
+    return 'Staff Code already taken.'
+  }
+  if (conflict.incomingField === 'Biometric User ID') {
+    return 'User ID already taken.'
+  }
+  return 'Staff Code/User ID already taken.'
+}
+
 function parseMmDdYyyyToIso(dateText) {
   const raw = String(dateText ?? '').trim()
   if (!raw) return null
@@ -521,6 +545,55 @@ function getEmployeeSaveErrorMessage(err) {
   }
 
   return 'Employee record already exists.'
+}
+
+async function findEmployeeBiometricConflict(pool, { employeeID = null, biometricStaffCode = null, biometricUserId = null } = {}) {
+  const incoming = [
+    { field: 'Biometric Staff Code', value: biometricStaffCode },
+    { field: 'Biometric User ID', value: biometricUserId }
+  ]
+    .map((item) => ({ ...item, value: String(item.value ?? '').trim() }))
+    .filter((item) => item.value)
+
+  if (!incoming.length) return null
+
+  const result = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeID || null)
+    .query(`
+      SELECT
+        EmployeeID,
+        BiometricStaffCode,
+        BiometricUserID
+      FROM dbo.Employees
+      WHERE (@EmployeeID IS NULL OR EmployeeID <> @EmployeeID)
+        AND (
+          (BiometricStaffCode IS NOT NULL AND LTRIM(RTRIM(BiometricStaffCode)) <> '')
+          OR
+          (BiometricUserID IS NOT NULL AND LTRIM(RTRIM(BiometricUserID)) <> '')
+        )
+    `)
+
+  for (const employee of result.recordset || []) {
+    const existing = [
+      { field: 'Biometric Staff Code', value: employee.BiometricStaffCode },
+      { field: 'Biometric User ID', value: employee.BiometricUserID }
+    ]
+      .map((item) => ({ ...item, value: String(item.value ?? '').trim() }))
+      .filter((item) => item.value)
+
+    for (const candidate of incoming) {
+      for (const current of existing) {
+        if (!biometricIdentifiersMatch(candidate.value, current.value)) continue
+        return {
+          incomingField: candidate.field,
+          existingField: current.field,
+          normalizedOnly: candidate.value !== current.value
+        }
+      }
+    }
+  }
+
+  return null
 }
 
 async function initDbIfNeeded(pool) {
@@ -1188,6 +1261,7 @@ END`,
 BEGIN
   CREATE TABLE dbo.AppUsers (
     UserID UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+    Username NVARCHAR(50) NOT NULL,
     Email NVARCHAR(255) NOT NULL UNIQUE,
     PasswordHash NVARCHAR(500) NOT NULL,
     Role NVARCHAR(30) NOT NULL DEFAULT 'ADMIN',
@@ -1233,6 +1307,7 @@ END`]
     for (const m of migrationStatements) {
       await pool.request().query(m)
     }
+    await ensureAppUserUsernames(pool)
     console.log('Database schema initialized successfully')
   } catch (err) {
     console.error('initDbIfNeeded error:', err.message)
@@ -1355,6 +1430,111 @@ function isLegacyPasswordHash(stored) {
   return s.startsWith('pbkdf2') && !s.startsWith('pbkdf2$')
 }
 
+function normalizeAdminIdentifier(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function sanitizeAdminUsername(value) {
+  return normalizeAdminIdentifier(value)
+    .replace(/[^a-z0-9._-]/g, '')
+    .replace(/^[._-]+/, '')
+    .replace(/[._-]+$/, '')
+    .slice(0, 50)
+}
+
+function isValidAdminUsername(value) {
+  return /^[a-z0-9](?:[a-z0-9._-]{1,48}[a-z0-9])$/.test(String(value || ''))
+}
+
+async function adminUsernameExists(pool, username, excludeUserId = null) {
+  const result = await pool.request()
+    .input('Username', sql.NVarChar(50), normalizeAdminIdentifier(username))
+    .input('ExcludeUserID', sql.NVarChar(36), excludeUserId || null)
+    .query(`
+      SELECT TOP 1 UserID
+      FROM dbo.AppUsers
+      WHERE LOWER(Username)=@Username
+        AND (@ExcludeUserID IS NULL OR UserID <> @ExcludeUserID)
+    `)
+
+  return Boolean(result.recordset?.length)
+}
+
+async function buildUniqueAdminUsername(pool, preferred, excludeUserId = null) {
+  const base = sanitizeAdminUsername(preferred) || 'admin'
+  let attempt = 1
+  let candidate = base
+
+  while (await adminUsernameExists(pool, candidate, excludeUserId)) {
+    attempt += 1
+    const suffix = `-${attempt}`
+    candidate = `${base.slice(0, Math.max(1, 50 - suffix.length))}${suffix}`
+  }
+
+  return candidate
+}
+
+async function ensureAppUserUsernames(pool) {
+  await pool.request().query(`
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID('dbo.AppUsers')
+        AND name = 'Username'
+    )
+    BEGIN
+      ALTER TABLE dbo.AppUsers ADD Username NVARCHAR(50) NULL
+    END
+  `)
+
+  const users = await pool.request().query(`
+    SELECT UserID, Username, Email
+    FROM dbo.AppUsers
+    ORDER BY CreatedAt ASC, UserID ASC
+  `)
+
+  for (const user of users.recordset || []) {
+    const current = sanitizeAdminUsername(user.Username)
+    const desired = await buildUniqueAdminUsername(
+      pool,
+      current || user.Email || user.UserID,
+      user.UserID
+    )
+
+    if (String(user.Username || '') !== desired) {
+      await pool.request()
+        .input('UserID', sql.NVarChar(36), String(user.UserID))
+        .input('Username', sql.NVarChar(50), desired)
+        .query('UPDATE dbo.AppUsers SET Username=@Username WHERE UserID=@UserID')
+    }
+  }
+
+  await pool.request().query(`
+    IF EXISTS (
+      SELECT 1
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID('dbo.AppUsers')
+        AND name = 'Username'
+        AND is_nullable = 1
+    )
+    BEGIN
+      ALTER TABLE dbo.AppUsers ALTER COLUMN Username NVARCHAR(50) NOT NULL
+    END
+  `)
+
+  await pool.request().query(`
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.indexes
+      WHERE name = 'UQ_AppUsers_Username'
+        AND object_id = OBJECT_ID('dbo.AppUsers')
+    )
+    BEGIN
+      CREATE UNIQUE INDEX UQ_AppUsers_Username ON dbo.AppUsers(Username)
+    END
+  `)
+}
+
 async function hasAnyAdminAuth(pool) {
   try {
     const r = await pool.request().query("SELECT COUNT(1) AS cnt FROM dbo.AppUsers WHERE Role='ADMIN' AND IsActive=1")
@@ -1366,6 +1546,23 @@ async function hasAnyAdminAuth(pool) {
     }
     throw e
   }
+}
+
+async function findAdminUserForLogin(pool, identifier) {
+  const normalized = normalizeAdminIdentifier(identifier)
+  if (!normalized) return { user: null, ambiguous: false }
+
+  const exact = await pool.request()
+    .input('Identifier', sql.NVarChar(255), normalized)
+    .query(`
+      SELECT TOP 1 UserID, Username, Email, PasswordHash, Role, IsActive
+      FROM dbo.AppUsers
+      WHERE LOWER(Username)=@Identifier
+         OR LOWER(Email)=@Identifier
+      ORDER BY CASE WHEN LOWER(Username)=@Identifier THEN 0 ELSE 1 END, CreatedAt ASC
+    `)
+
+  return { user: exact.recordset?.[0] || null, ambiguous: false }
 }
 
 function authOptional(req, _res, next) {
@@ -1400,8 +1597,12 @@ app.get('/auth/bootstrap-status', async (req, res) => {
 })
 
 app.post('/auth/setup-admin', async (req, res) => {
-  const email = String(req.body?.email || req.body?.username || '').trim().toLowerCase()
+  const username = sanitizeAdminUsername(req.body?.username)
+  const email = normalizeAdminIdentifier(req.body?.email)
   const password = String(req.body?.password || '').trim()
+  if (!isValidAdminUsername(username)) {
+    return res.status(400).json({ error: 'Username must be 3-50 characters and use only letters, numbers, dots, underscores, or dashes.' })
+  }
   if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email is required' })
   if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
 
@@ -1414,43 +1615,63 @@ app.post('/auth/setup-admin', async (req, res) => {
     const { randomUUID } = require('crypto')
     const userId = randomUUID()
 
+    const existing = await pool.request()
+      .input('Username', sql.NVarChar(50), username)
+      .input('Email', sql.NVarChar(255), email)
+      .query(`
+        SELECT TOP 1 Username, Email
+        FROM dbo.AppUsers
+        WHERE LOWER(Username)=@Username OR LOWER(Email)=@Email
+        ORDER BY CASE WHEN LOWER(Username)=@Username THEN 0 ELSE 1 END
+      `)
+    const taken = existing.recordset?.[0] || null
+    if (taken) {
+      if (normalizeAdminIdentifier(taken.Username) === username) {
+        return res.status(409).json({ error: 'Username already registered' })
+      }
+      if (normalizeAdminIdentifier(taken.Email) === email) {
+        return res.status(409).json({ error: 'Email already registered' })
+      }
+    }
+
     await pool.request()
       .input('UserID', sql.NVarChar(36), userId)
+      .input('Username', sql.NVarChar(50), username)
       .input('Email', sql.NVarChar(255), email)
       .input('PasswordHash', sql.NVarChar(500), hashPassword(password))
       .input('Role', sql.NVarChar(30), 'ADMIN')
-      .query('INSERT INTO dbo.AppUsers (UserID, Email, PasswordHash, Role, IsActive) VALUES (@UserID, @Email, @PasswordHash, @Role, 1)')
+      .query('INSERT INTO dbo.AppUsers (UserID, Username, Email, PasswordHash, Role, IsActive) VALUES (@UserID, @Username, @Email, @PasswordHash, @Role, 1)')
 
-    const token = signToken({ sub: userId, email, role: 'ADMIN' })
-    res.json({ success: true, token, user: { email, role: 'ADMIN' } })
+    const token = signToken({ sub: userId, username, email, role: 'ADMIN' })
+    res.json({ success: true, token, user: { id: userId, username, email, role: 'ADMIN' } })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
 app.post('/auth/login', async (req, res) => {
-  const email = String(req.body?.email || req.body?.username || '').trim().toLowerCase()
+  const username = normalizeAdminIdentifier(req.body?.username || req.body?.email)
   const password = String(req.body?.password || '').trim()
 
-  if (!email || !password) return res.status(400).json({ error: 'email and password are required' })
+  if (!username || !password) return res.status(400).json({ error: 'User and password are required' })
 
   try {
     const pool = await getPool()
 
-    if (email === 'admin' && password === 'admin') {
+    if (username === 'admin' && password === 'admin') {
       const already = await hasAnyAdminAuth(pool)
       if (!already) {
-        const token = signToken({ sub: 'bootstrap', email: 'bootstrap-admin', role: 'ADMIN' }, 60 * 60)
-        return res.json({ success: true, token, user: { email: 'bootstrap-admin', role: 'ADMIN' }, bootstrap: true })
+        const token = signToken({ sub: 'bootstrap', username: 'admin', email: 'bootstrap-admin', role: 'ADMIN' }, 60 * 60)
+        return res.json({ success: true, token, user: { id: 'bootstrap', username: 'admin', email: 'bootstrap-admin', role: 'ADMIN' }, bootstrap: true })
       }
     }
 
-    const r = await pool.request()
-      .input('Email', sql.NVarChar(255), email)
-      .query('SELECT TOP 1 UserID, Email, PasswordHash, Role, IsActive FROM dbo.AppUsers WHERE LOWER(Email)=@Email')
+    const { user: u, ambiguous } = await findAdminUserForLogin(pool, username)
+    if (ambiguous) {
+      return res.status(409).json({ error: 'Multiple admin accounts match that user. Sign in with the full email address.' })
+    }
 
-    if (!r.recordset?.length) return res.status(401).json({ error: 'Invalid credentials' })
-    const u = r.recordset[0]
+    if (!u) return res.status(401).json({ error: 'Invalid credentials' })
     if (!u.IsActive) return res.status(403).json({ error: 'Account disabled' })
 
     const storedHash = String(u.PasswordHash || '')
@@ -1464,8 +1685,22 @@ app.post('/auth/login', async (req, res) => {
         ? 'UPDATE dbo.AppUsers SET PasswordHash=@PasswordHash, LastLoginAt=GETDATE() WHERE UserID=@UserID'
         : 'UPDATE dbo.AppUsers SET LastLoginAt=GETDATE() WHERE UserID=@UserID')
 
-    const token = signToken({ sub: String(u.UserID), email: String(u.Email), role: String(u.Role) })
-    res.json({ success: true, token, user: { email: u.Email, role: u.Role } })
+    const token = signToken({
+      sub: String(u.UserID),
+      username: String(u.Username || ''),
+      email: String(u.Email),
+      role: String(u.Role)
+    })
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: String(u.UserID),
+        username: String(u.Username || ''),
+        email: u.Email,
+        role: u.Role
+      }
+    })
   } catch (err) {
     const msg = String(err?.message || err)
     if (msg.toLowerCase().includes('invalid object name') && msg.toLowerCase().includes('appusers')) {
@@ -1477,19 +1712,126 @@ app.post('/auth/login', async (req, res) => {
 
 app.get('/auth/me', async (req, res) => {
   if (!req.authUser) return res.status(401).json({ error: 'Unauthorized' })
-  res.json({ user: { email: req.authUser.email, role: req.authUser.role } })
+  res.json({
+    user: {
+      id: req.authUser.sub || null,
+      username: req.authUser.username || '',
+      email: req.authUser.email,
+      role: req.authUser.role
+    }
+  })
 })
 
 app.get('/auth/admin-users', requireAdmin, async (req, res) => {
   try {
     const pool = await getPool()
     const r = await pool.request().query(`
-      SELECT UserID, Email, Role, CreatedAt, LastLoginAt
+      SELECT UserID, Username, Email, Role, CreatedAt, LastLoginAt
       FROM dbo.AppUsers
       WHERE Role='ADMIN' AND IsActive=1
       ORDER BY CreatedAt DESC
     `)
     res.json(r.recordset || [])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.put('/auth/admin-users/:id', requireAdmin, async (req, res) => {
+  const userId = String(req.params?.id || '').trim()
+  const actorUserId = String(req.authUser?.sub || '').trim()
+  const username = sanitizeAdminUsername(req.body?.username)
+  const email = normalizeAdminIdentifier(req.body?.email)
+
+  if (!userId) return res.status(400).json({ error: 'UserID is required' })
+  if (!actorUserId || actorUserId !== userId) {
+    return res.status(403).json({ error: 'You can only edit your own admin account' })
+  }
+  if (!isValidAdminUsername(username)) {
+    return res.status(400).json({ error: 'Username must be 3-50 characters and use only letters, numbers, dots, underscores, or dashes.' })
+  }
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'Valid email is required' })
+  }
+
+  try {
+    const pool = await getPool()
+
+    const beforeRes = await pool.request()
+      .input('UserID', sql.NVarChar(36), userId)
+      .query(`
+        SELECT TOP 1 UserID, Username, Email, Role, IsActive, CreatedAt, LastLoginAt
+        FROM dbo.AppUsers
+        WHERE UserID=@UserID
+      `)
+    const before = beforeRes.recordset?.[0] || null
+    if (!before) return res.status(404).json({ error: 'Admin account not found' })
+    if (!before.IsActive) return res.status(409).json({ error: 'Admin account is inactive' })
+    if (String(before.Role || '').toUpperCase() !== 'ADMIN') {
+      return res.status(400).json({ error: 'Only admin accounts can be edited here' })
+    }
+
+    const existing = await pool.request()
+      .input('Username', sql.NVarChar(50), username)
+      .input('Email', sql.NVarChar(255), email)
+      .input('UserID', sql.NVarChar(36), userId)
+      .query(`
+        SELECT TOP 1 Username, Email
+        FROM dbo.AppUsers
+        WHERE UserID <> @UserID
+          AND (LOWER(Username)=@Username OR LOWER(Email)=@Email)
+        ORDER BY CASE WHEN LOWER(Username)=@Username THEN 0 ELSE 1 END
+      `)
+    const taken = existing.recordset?.[0] || null
+    if (taken) {
+      if (normalizeAdminIdentifier(taken.Username) === username) {
+        return res.status(409).json({ error: 'Username already registered' })
+      }
+      if (normalizeAdminIdentifier(taken.Email) === email) {
+        return res.status(409).json({ error: 'Email already registered' })
+      }
+    }
+
+    const updatedRes = await pool.request()
+      .input('UserID', sql.NVarChar(36), userId)
+      .input('Username', sql.NVarChar(50), username)
+      .input('Email', sql.NVarChar(255), email)
+      .query(`
+        UPDATE dbo.AppUsers
+        SET Username=@Username, Email=@Email
+        OUTPUT INSERTED.UserID, INSERTED.Username, INSERTED.Email, INSERTED.Role, INSERTED.IsActive, INSERTED.CreatedAt, INSERTED.LastLoginAt
+        WHERE UserID=@UserID
+      `)
+    const updated = updatedRes.recordset?.[0] || null
+    if (!updated) return res.status(404).json({ error: 'Admin account not found' })
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'UPDATE_ADMIN_PROFILE',
+      tableName: 'AppUsers',
+      recordID: userId,
+      beforeJson: JSON.stringify(before),
+      afterJson: JSON.stringify(updated),
+      ipAddress: req.ip
+    })
+
+    const token = signToken({
+      sub: String(updated.UserID),
+      username: String(updated.Username || ''),
+      email: String(updated.Email || ''),
+      role: String(updated.Role || 'ADMIN')
+    })
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: String(updated.UserID),
+        username: String(updated.Username || ''),
+        email: String(updated.Email || ''),
+        role: String(updated.Role || 'ADMIN')
+      }
+    })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -1509,7 +1851,7 @@ app.delete('/auth/admin-users/:id', requireAdmin, async (req, res) => {
     request.input('UserID', sql.NVarChar(36), userId)
 
     const targetRes = await request.query(`
-      SELECT TOP 1 UserID, Email, Role, IsActive, CreatedAt, LastLoginAt
+      SELECT TOP 1 UserID, Username, Email, Role, IsActive, CreatedAt, LastLoginAt
       FROM dbo.AppUsers
       WHERE UserID=@UserID
     `)
@@ -1529,8 +1871,8 @@ app.delete('/auth/admin-users/:id', requireAdmin, async (req, res) => {
       return res.status(409).json({ error: 'Admin account is already inactive' })
     }
 
-    const actorEmail = String(req.authUser?.email || '').trim().toLowerCase()
-    if (actorEmail && String(target.Email || '').trim().toLowerCase() === actorEmail) {
+    const actorUserId = String(req.authUser?.sub || '').trim()
+    if (actorUserId && String(target.UserID || '').trim() === actorUserId) {
       await transaction.rollback()
       return res.status(403).json({ error: 'You cannot delete your own admin account' })
     }
@@ -1594,6 +1936,7 @@ app.post('/auth/invitations', requireAdmin, async (req, res) => {
       .input('CreatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || null))
       .query('INSERT INTO dbo.AdminInvitations (InvitationID, Email, TokenHash, ExpiresAt, CreatedByUserID) VALUES (@InvitationID, @Email, @TokenHash, @ExpiresAt, @CreatedByUserID)')
 
+    const expiresAt = new Date(Date.now() + expiresHours * 3600 * 1000)
     const registerPath = `/register-admin?token=${encodeURIComponent(token)}${inviteEmail ? `&email=${encodeURIComponent(inviteEmail)}` : ''}`
     let emailSent = false
     let emailError = null
@@ -1623,6 +1966,7 @@ app.post('/auth/invitations', requireAdmin, async (req, res) => {
       success: true,
       token,
       registerPath,
+      expiresAt: expiresAt.toISOString(),
       emailSent,
       emailError
     })
@@ -1633,10 +1977,14 @@ app.post('/auth/invitations', requireAdmin, async (req, res) => {
 
 app.post('/auth/register-admin', async (req, res) => {
   const token = String(req.body?.token || '').trim()
-  const email = String(req.body?.email || '').trim().toLowerCase()
+  const username = sanitizeAdminUsername(req.body?.username)
+  const email = normalizeAdminIdentifier(req.body?.email)
   const password = String(req.body?.password || '').trim()
 
   if (!token) return res.status(400).json({ error: 'Invitation token is required' })
+  if (!isValidAdminUsername(username)) {
+    return res.status(400).json({ error: 'Username must be 3-50 characters and use only letters, numbers, dots, underscores, or dashes.' })
+  }
   if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email is required' })
   if (!password || password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
 
@@ -1654,23 +2002,40 @@ app.post('/auth/register-admin', async (req, res) => {
     if (row.ExpiresAt && new Date(row.ExpiresAt) < new Date()) return res.status(410).json({ error: 'Invitation token expired' })
     if (row.Email && String(row.Email).toLowerCase() !== email) return res.status(400).json({ error: 'Invitation token is not for this email' })
 
-    const existing = await pool.request().input('Email', sql.NVarChar(255), email).query('SELECT TOP 1 UserID FROM dbo.AppUsers WHERE LOWER(Email)=@Email')
-    if (existing.recordset?.length) return res.status(409).json({ error: 'Email already registered' })
+    const existing = await pool.request()
+      .input('Username', sql.NVarChar(50), username)
+      .input('Email', sql.NVarChar(255), email)
+      .query(`
+        SELECT TOP 1 Username, Email
+        FROM dbo.AppUsers
+        WHERE LOWER(Username)=@Username OR LOWER(Email)=@Email
+        ORDER BY CASE WHEN LOWER(Username)=@Username THEN 0 ELSE 1 END
+      `)
+    const taken = existing.recordset?.[0] || null
+    if (taken) {
+      if (normalizeAdminIdentifier(taken.Username) === username) {
+        return res.status(409).json({ error: 'Username already registered' })
+      }
+      if (normalizeAdminIdentifier(taken.Email) === email) {
+        return res.status(409).json({ error: 'Email already registered' })
+      }
+    }
 
     const { randomUUID } = require('crypto')
     const userId = randomUUID()
 
     await pool.request()
       .input('UserID', sql.NVarChar(36), userId)
+      .input('Username', sql.NVarChar(50), username)
       .input('Email', sql.NVarChar(255), email)
       .input('PasswordHash', sql.NVarChar(500), hashPassword(password))
       .input('Role', sql.NVarChar(30), 'ADMIN')
-      .query('INSERT INTO dbo.AppUsers (UserID, Email, PasswordHash, Role, IsActive) VALUES (@UserID, @Email, @PasswordHash, @Role, 1)')
+      .query('INSERT INTO dbo.AppUsers (UserID, Username, Email, PasswordHash, Role, IsActive) VALUES (@UserID, @Username, @Email, @PasswordHash, @Role, 1)')
 
     await pool.request().input('InvitationID', sql.NVarChar(36), row.InvitationID).query('UPDATE dbo.AdminInvitations SET UsedAt=GETDATE() WHERE InvitationID=@InvitationID')
 
-    const jwt = signToken({ sub: userId, email, role: 'ADMIN' })
-    res.json({ success: true, token: jwt, user: { email, role: 'ADMIN' } })
+    const jwt = signToken({ sub: userId, username, email, role: 'ADMIN' })
+    res.json({ success: true, token: jwt, user: { id: userId, username, email, role: 'ADMIN' } })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -1747,7 +2112,7 @@ app.post('/auth/reset-password', async (req, res) => {
     const tokenHash = crypto.createHash('sha256').update(token).digest()
 
     const r = await pool.request().input('TokenHash', sql.VarBinary(32), tokenHash).query(`
-      SELECT TOP 1 pr.ResetID, pr.UserID, pr.Email, pr.ExpiresAt, pr.UsedAt, u.Role, u.IsActive
+      SELECT TOP 1 pr.ResetID, pr.UserID, pr.Email, pr.ExpiresAt, pr.UsedAt, u.Username, u.Role, u.IsActive
       FROM dbo.AdminPasswordResets pr
       JOIN dbo.AppUsers u ON u.UserID = pr.UserID
       WHERE pr.TokenHash=@TokenHash
@@ -1769,8 +2134,22 @@ app.post('/auth/reset-password', async (req, res) => {
       .input('ResetID', sql.NVarChar(36), String(row.ResetID))
       .query('UPDATE dbo.AdminPasswordResets SET UsedAt=GETDATE() WHERE ResetID=@ResetID')
 
-    const jwt = signToken({ sub: String(row.UserID), email: String(row.Email), role: 'ADMIN' })
-    res.json({ success: true, token: jwt, user: { email: row.Email, role: 'ADMIN' } })
+    const jwt = signToken({
+      sub: String(row.UserID),
+      username: String(row.Username || ''),
+      email: String(row.Email),
+      role: 'ADMIN'
+    })
+    res.json({
+      success: true,
+      token: jwt,
+      user: {
+        id: String(row.UserID),
+        username: String(row.Username || ''),
+        email: row.Email,
+        role: 'ADMIN'
+      }
+    })
   } catch (err) {
     const msg = String(err?.message || err)
     if (msg.toLowerCase().includes('invalid object name') && (msg.toLowerCase().includes('appusers') || msg.toLowerCase().includes('adminpasswordresets'))) {
@@ -3326,8 +3705,6 @@ app.post('/devices/register-connection', async (req, res) => {
           LocationName = COALESCE(@LocationName, LocationName),
           Latitude = COALESCE(@Latitude, Latitude),
           Longitude = COALESCE(@Longitude, Longitude),
-          IsActive = 1,
-          LastSeenAt = GETDATE(),
           UpdatedAt = GETDATE()
         OUTPUT INSERTED.*
         WHERE DeviceCode=@DeviceCode
@@ -3353,7 +3730,7 @@ app.post('/devices/register-connection', async (req, res) => {
 
     return res.json({
       success: true,
-      status,
+      status: device?.LastSeenAt ? status : 'registered',
       connectionID,
       serverTime: new Date().toISOString(),
       device
@@ -4472,10 +4849,16 @@ app.post('/audit-logs', requireAdmin, async (req, res) => {
 function normalizeSpecialDayType(value) {
   const raw = String(value || '').trim()
   if (!raw) return ''
-  return raw
+  const normalized = raw
     .replace(/\s+/g, '_')
     .replace(/-+/g, '_')
     .toUpperCase()
+
+  if (normalized === 'REGULAR_HOLIDAY') return 'HOLIDAY'
+  if (normalized === 'SPECIAL' || normalized === 'SPECIAL_DAY' || normalized === 'SPECIAL_NONWORKING' || normalized === 'SPECIAL_NON_WORKING_DAY') {
+    return 'SPECIAL_NON_WORKING'
+  }
+  return normalized
 }
 
 function isValidIsoDate(value) {
@@ -4683,7 +5066,7 @@ app.post('/special-days', requireAdmin, async (req, res) => {
   const DayType = normalizeSpecialDayType(req.body?.DayType || req.body?.dayType)
   const Description = (req.body?.Description ?? req.body?.description ?? null)
   if (!isValidIsoDate(SpecialDate)) return res.status(400).json({ error: 'SpecialDate is required (YYYY-MM-DD)' })
-  if (!DayType) return res.status(400).json({ error: 'DayType is required (e.g. HOLIDAY, REST_DAY, HALF_DAY_AM, HALF_DAY_PM)' })
+  if (!DayType) return res.status(400).json({ error: 'DayType is required (e.g. HOLIDAY, SPECIAL_NON_WORKING, REST_DAY, HALF_DAY_AM, HALF_DAY_PM)' })
 
   try {
     const pool = await getPool()
@@ -5268,25 +5651,66 @@ function lastMondayOfMonthUtc(year, month1to12) {
   return addDaysUtc(last, -offset)
 }
 
+function findCalendarDateUtc(year, calendarCandidates, targetMonth, targetDay) {
+  for (const calendar of calendarCandidates) {
+    try {
+      const formatter = new Intl.DateTimeFormat(`en-u-ca-${calendar}`, {
+        day: 'numeric',
+        month: 'numeric',
+        year: 'numeric',
+        timeZone: 'UTC'
+      })
+
+      for (let month = 0; month < 12; month += 1) {
+        const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+        for (let day = 1; day <= daysInMonth; day += 1) {
+          const date = new Date(Date.UTC(year, month, day))
+          const parts = formatter.formatToParts(date)
+          const monthPart = Number(parts.find((part) => part.type === 'month')?.value || 0)
+          const dayPart = Number(parts.find((part) => part.type === 'day')?.value || 0)
+          if (monthPart === targetMonth && dayPart === targetDay) return date
+        }
+      }
+    } catch (_) {}
+  }
+
+  return null
+}
+
+function findIslamicHolidayDateUtc(year, islamicMonth, islamicDay) {
+  return findCalendarDateUtc(year, ['islamic-umalqura', 'islamic', 'islamic-civil'], islamicMonth, islamicDay)
+}
+
+function findChineseHolidayDateUtc(year, chineseMonth, chineseDay) {
+  return findCalendarDateUtc(year, ['chinese'], chineseMonth, chineseDay)
+}
+
 function generatePhilippinesHolidays(year) {
   const items = []
 
-  const fixed = [
+  const regularFixed = [
     { m: 1, d: 1, desc: "New Year's Day" },
-    { m: 2, d: 25, desc: 'EDSA People Power Revolution Anniversary' },
     { m: 4, d: 9, desc: 'Day of Valor' },
     { m: 5, d: 1, desc: 'Labor Day' },
     { m: 6, d: 12, desc: 'Independence Day' },
+    { m: 11, d: 30, desc: 'Bonifacio Day' },
+    { m: 12, d: 25, desc: 'Christmas Day' },
+    { m: 12, d: 30, desc: 'Rizal Day' }
+  ]
+  for (const h of regularFixed) {
+    items.push({ SpecialDate: isoDate(year, h.m, h.d), DayType: 'HOLIDAY', Description: h.desc })
+  }
+
+  const specialNonWorkingFixed = [
     { m: 8, d: 21, desc: 'Ninoy Aquino Day' },
     { m: 11, d: 1, desc: "All Saints' Day" },
-    { m: 11, d: 30, desc: 'Bonifacio Day' },
-    { m: 12, d: 8, desc: 'Immaculate Conception' },
-    { m: 12, d: 25, desc: 'Christmas Day' },
-    { m: 12, d: 30, desc: 'Rizal Day' },
-    { m: 12, d: 31, desc: "New Year's Eve" }
+    { m: 11, d: 2, desc: "All Souls' Day" },
+    { m: 12, d: 8, desc: 'Feast of the Immaculate Conception of Mary' },
+    { m: 12, d: 24, desc: 'Christmas Eve' },
+    { m: 12, d: 31, desc: 'Last Day of the Year' }
   ]
-  for (const h of fixed) {
-    items.push({ SpecialDate: isoDate(year, h.m, h.d), DayType: 'HOLIDAY', Description: h.desc })
+  for (const h of specialNonWorkingFixed) {
+    items.push({ SpecialDate: isoDate(year, h.m, h.d), DayType: 'SPECIAL_NON_WORKING', Description: h.desc })
   }
 
   // National Heroes Day: last Monday of August
@@ -5295,7 +5719,19 @@ function generatePhilippinesHolidays(year) {
     items.push({ SpecialDate: isoDate(year, nhd.getUTCMonth() + 1, nhd.getUTCDate()), DayType: 'HOLIDAY', Description: 'National Heroes Day' })
   } catch (_) {}
 
-  // Holy Week (commonly observed): Maundy Thursday, Good Friday, Black Saturday
+  // Additional special non-working days declared in the yearly proclamation.
+  try {
+    const cny = findChineseHolidayDateUtc(year, 1, 1)
+    if (cny) {
+      items.push({
+        SpecialDate: isoDate(year, cny.getUTCMonth() + 1, cny.getUTCDate()),
+        DayType: 'SPECIAL_NON_WORKING',
+        Description: 'Chinese New Year'
+      })
+    }
+  } catch (_) {}
+
+  // Holy Week: Maundy Thursday, Good Friday, Black Saturday
   try {
     const easter = easterSundayUtc(year)
     const maundyThu = addDaysUtc(easter, -3)
@@ -5303,7 +5739,28 @@ function generatePhilippinesHolidays(year) {
     const blackSat = addDaysUtc(easter, -1)
     items.push({ SpecialDate: isoDate(year, maundyThu.getUTCMonth() + 1, maundyThu.getUTCDate()), DayType: 'HOLIDAY', Description: 'Maundy Thursday' })
     items.push({ SpecialDate: isoDate(year, goodFri.getUTCMonth() + 1, goodFri.getUTCDate()), DayType: 'HOLIDAY', Description: 'Good Friday' })
-    items.push({ SpecialDate: isoDate(year, blackSat.getUTCMonth() + 1, blackSat.getUTCDate()), DayType: 'HOLIDAY', Description: 'Black Saturday' })
+    items.push({ SpecialDate: isoDate(year, blackSat.getUTCMonth() + 1, blackSat.getUTCDate()), DayType: 'SPECIAL_NON_WORKING', Description: 'Black Saturday' })
+  } catch (_) {}
+
+  // Muslim holidays observed nationally in the Philippines.
+  try {
+    const eidAlFitr = findIslamicHolidayDateUtc(year, 10, 1)
+    if (eidAlFitr) {
+      items.push({
+        SpecialDate: isoDate(year, eidAlFitr.getUTCMonth() + 1, eidAlFitr.getUTCDate()),
+        DayType: 'HOLIDAY',
+        Description: "Eid'l Fitr"
+      })
+    }
+
+    const eidAlAdha = findIslamicHolidayDateUtc(year, 12, 10)
+    if (eidAlAdha) {
+      items.push({
+        SpecialDate: isoDate(year, eidAlAdha.getUTCMonth() + 1, eidAlAdha.getUTCDate()),
+        DayType: 'HOLIDAY',
+        Description: "Eid'l Adha"
+      })
+    }
   } catch (_) {}
 
   // Deduplicate in-memory (date+type)
@@ -5451,6 +5908,12 @@ app.get('/attendance/today', async (req, res) => {
                   WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Holiday'
                   ELSE 'Holiday (Worked)'
                 END
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'SPECIAL_NON_WORKING'
+                THEN CASE
+                  WHEN a.AttendanceID IS NULL THEN 'Special Non-Working Day'
+                  WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Special Non-Working Day'
+                  ELSE 'Special Non-Working Day (Worked)'
+                END
               WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'REST_DAY'
                 THEN CASE
                   WHEN a.AttendanceID IS NULL THEN 'Rest Day'
@@ -5491,8 +5954,9 @@ app.get('/attendance/today', async (req, res) => {
           ORDER BY
             CASE
               WHEN UPPER(sd0.DayType) = 'HOLIDAY' THEN 1
-              WHEN UPPER(sd0.DayType) = 'REST_DAY' THEN 2
-              WHEN UPPER(sd0.DayType) LIKE 'HALF_DAY%' THEN 3
+              WHEN UPPER(sd0.DayType) = 'SPECIAL_NON_WORKING' THEN 2
+              WHEN UPPER(sd0.DayType) = 'REST_DAY' THEN 3
+              WHEN UPPER(sd0.DayType) LIKE 'HALF_DAY%' THEN 4
               ELSE 99
             END,
             sd0.DayType ASC
@@ -5593,6 +6057,12 @@ app.post('/attendance/range', async (req, res) => {
                   WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Holiday'
                   ELSE 'Holiday (Worked)'
                 END
+              WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'SPECIAL_NON_WORKING'
+                THEN CASE
+                  WHEN a.AttendanceID IS NULL THEN 'Special Non-Working Day'
+                  WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Special Non-Working Day'
+                  ELSE 'Special Non-Working Day (Worked)'
+                END
               WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) = 'REST_DAY'
                 THEN CASE
                   WHEN a.AttendanceID IS NULL THEN 'Rest Day'
@@ -5633,8 +6103,9 @@ app.post('/attendance/range', async (req, res) => {
           ORDER BY
             CASE
               WHEN UPPER(sd0.DayType) = 'HOLIDAY' THEN 1
-              WHEN UPPER(sd0.DayType) = 'REST_DAY' THEN 2
-              WHEN UPPER(sd0.DayType) LIKE 'HALF_DAY%' THEN 3
+              WHEN UPPER(sd0.DayType) = 'SPECIAL_NON_WORKING' THEN 2
+              WHEN UPPER(sd0.DayType) = 'REST_DAY' THEN 3
+              WHEN UPPER(sd0.DayType) LIKE 'HALF_DAY%' THEN 4
               ELSE 99
             END,
             sd0.DayType ASC
@@ -5966,6 +6437,16 @@ app.post('/employees', async (req, res) => {
     const firstName = parts.shift() || ''
     const lastName = parts.join(' ') || ''
     const employeeCode = `EMP${Date.now()}`
+    const incomingStaffCode = (biometricStaffCode ?? BiometricStaffCode ?? null) ? String(biometricStaffCode ?? BiometricStaffCode).trim() : null
+    const incomingUserId = (biometricUserId ?? BiometricUserID ?? null) ? String(biometricUserId ?? BiometricUserID).trim() : null
+
+    const biometricConflict = await findEmployeeBiometricConflict(pool, {
+      biometricStaffCode: incomingStaffCode,
+      biometricUserId: incomingUserId
+    })
+    if (biometricConflict) {
+      return res.status(409).json({ error: getBiometricConflictMessage(biometricConflict) })
+    }
 
     request.input('EmployeeID', sql.NVarChar(36), randomUUID())
     request.input('EmployeeCode', sql.NVarChar(50), employeeCode)
@@ -5976,8 +6457,8 @@ app.post('/employees', async (req, res) => {
     request.input('HireDate', sql.Date, new Date())
     request.input('EmploymentStatus', sql.NVarChar(50), position || 'Employee')
     request.input('Department', sql.NVarChar(100), department || null)
-    request.input('BiometricStaffCode', sql.NVarChar(50), (biometricStaffCode ?? BiometricStaffCode ?? null) ? String(biometricStaffCode ?? BiometricStaffCode).trim() : null)
-    request.input('BiometricUserID', sql.NVarChar(50), (biometricUserId ?? BiometricUserID ?? null) ? String(biometricUserId ?? BiometricUserID).trim() : null)
+    request.input('BiometricStaffCode', sql.NVarChar(50), incomingStaffCode)
+    request.input('BiometricUserID', sql.NVarChar(50), incomingUserId)
 
     const insertQ = `INSERT INTO dbo.Employees (EmployeeID, EmployeeCode, FirstName, LastName, Department, BiometricStaffCode, BiometricUserID, ContactNumber, Email, HireDate, EmploymentStatus)
       OUTPUT
@@ -5995,7 +6476,7 @@ app.post('/employees', async (req, res) => {
     const created = result.recordset[0]
 
     await writeAuditLog(pool, {
-      actor: resolveAuditActor(req, created?.employeeCode || 'UI'),
+      actor: resolveAuditActor(req, null),
       action: 'CREATE_EMPLOYEE',
       tableName: 'Employees',
       recordID: created?.id || null,
@@ -6023,6 +6504,17 @@ app.put('/employees/:id', async (req, res) => {
     const parts = fullName.split(/\s+/)
     const firstName = parts.shift() || ''
     const lastName = parts.join(' ') || ''
+    const incomingStaffCode = (biometricStaffCode ?? BiometricStaffCode ?? null) ? String(biometricStaffCode ?? BiometricStaffCode).trim() : null
+    const incomingUserId = (biometricUserId ?? BiometricUserID ?? null) ? String(biometricUserId ?? BiometricUserID).trim() : null
+
+    const biometricConflict = await findEmployeeBiometricConflict(pool, {
+      employeeID: id,
+      biometricStaffCode: incomingStaffCode,
+      biometricUserId: incomingUserId
+    })
+    if (biometricConflict) {
+      return res.status(409).json({ error: getBiometricConflictMessage(biometricConflict) })
+    }
 
     const beforeRes = await pool.request()
       .input('EmployeeID', sql.NVarChar(36), id)
@@ -6049,8 +6541,8 @@ app.put('/employees/:id', async (req, res) => {
     request.input('Email', sql.NVarChar(150), email || null)
     request.input('EmploymentStatus', sql.NVarChar(50), position || 'Employee')
     request.input('Department', sql.NVarChar(100), department || null)
-    request.input('BiometricStaffCode', sql.NVarChar(50), (biometricStaffCode ?? BiometricStaffCode ?? null) ? String(biometricStaffCode ?? BiometricStaffCode).trim() : null)
-    request.input('BiometricUserID', sql.NVarChar(50), (biometricUserId ?? BiometricUserID ?? null) ? String(biometricUserId ?? BiometricUserID).trim() : null)
+    request.input('BiometricStaffCode', sql.NVarChar(50), incomingStaffCode)
+    request.input('BiometricUserID', sql.NVarChar(50), incomingUserId)
 
     const updateQ = `UPDATE dbo.Employees
       SET
@@ -6078,7 +6570,7 @@ app.put('/employees/:id', async (req, res) => {
     const updated = result.recordset[0]
 
     await writeAuditLog(pool, {
-      actor: resolveAuditActor(req, updated?.employeeCode || id),
+      actor: resolveAuditActor(req, null),
       action: 'UPDATE_EMPLOYEE',
       tableName: 'Employees',
       recordID: id,
@@ -6145,9 +6637,10 @@ app.post('/employees/bulk-delete', async (req, res) => {
     await transaction.commit()
 
     await writeAuditLog(pool, {
-      actor: resolveAuditActor(req, 'UI'),
-      action: 'BULK_DELETE_EMPLOYEES',
+      actor: resolveAuditActor(req, null),
+      action: ids.length === 1 ? 'DELETE_EMPLOYEE' : 'BULK_DELETE_EMPLOYEES',
       tableName: 'Employees',
+      recordID: ids.length === 1 ? ids[0] : null,
       afterJson: JSON.stringify({ requested: ids.length, ids, deleted: deletedTotal }),
       ipAddress: req.ip
     })
@@ -6210,7 +6703,7 @@ app.delete('/employees/:id', async (req, res) => {
     await transaction.commit()
 
     await writeAuditLog(pool, {
-      actor: resolveAuditActor(req, id),
+      actor: resolveAuditActor(req, null),
       action: 'DELETE_EMPLOYEE',
       tableName: 'Employees',
       recordID: id,

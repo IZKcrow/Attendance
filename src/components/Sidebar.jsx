@@ -31,7 +31,6 @@ const SCHEDULE_GROUP = [
 ]
 
 const ATTENDANCE_GROUP = [
-  { id: 'attendance', label: 'Attendance Records', icon: TimerIcon },
   { id: 'attendance-report', label: 'Attendance Report', icon: AssignmentIcon },
   { id: 'reports', label: 'Generate Report', icon: AssignmentIcon },
   { id: 'overtime', label: 'Approved Overtime', icon: AssignmentIcon },

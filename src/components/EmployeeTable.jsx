@@ -309,8 +309,14 @@ export default function EmployeeTable() {
 
     setDeleting(true)
     try {
-      const result = await api.bulkDeleteEmployees(list)
-      const deletedCount = Number(result?.deleted ?? list.length)
+      let deletedCount = list.length
+      if (list.length === 1) {
+        await api.deleteEmployee(list[0])
+        deletedCount = 1
+      } else {
+        const result = await api.bulkDeleteEmployees(list)
+        deletedCount = Number(result?.deleted ?? list.length)
+      }
 
       const idSet = new Set(list)
       setEmployees(prev => prev.filter(p => !idSet.has(p.id)))

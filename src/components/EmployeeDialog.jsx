@@ -56,10 +56,20 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
             <TextField fullWidth label="Department" value={form.department} onChange={handleChange('department')} />
           </Grid>
           <Grid item xs={12} sm={6}>
-            <TextField fullWidth label="Biometric Staff Code" value={form.biometricStaffCode || ''} onChange={handleChange('biometricStaffCode')} />
+            <TextField
+              fullWidth
+              label="Biometric Staff Code"
+              value={form.biometricStaffCode || ''}
+              onChange={handleChange('biometricStaffCode')}
+            />
           </Grid>
           <Grid item xs={12} sm={6}>
-            <TextField fullWidth label="Biometric User ID" value={form.biometricUserId || ''} onChange={handleChange('biometricUserId')} />
+            <TextField
+              fullWidth
+              label="Biometric User ID"
+              value={form.biometricUserId || ''}
+              onChange={handleChange('biometricUserId')}
+            />
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField fullWidth label="Email" value={form.email} onChange={handleChange('email')} />

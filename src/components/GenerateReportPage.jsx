@@ -27,6 +27,8 @@ const reportStatusOptions = [
   { value: 'half-day', label: 'Half-Day' },
   { value: 'holiday', label: 'Holiday' },
   { value: 'holiday-worked', label: 'Holiday (Worked)' },
+  { value: 'special-day', label: 'Special Day' },
+  { value: 'special-day-worked', label: 'Special Day (Worked)' },
   { value: 'rest-day', label: 'Rest Day' },
   { value: 'rest-day-worked', label: 'Rest Day (Worked)' }
 ]
@@ -135,6 +137,11 @@ function formatMinutesAsHoursMins(totalMinutes) {
   return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ${String(mins).padStart(2, '0')} ${mins === 1 ? 'min' : 'mins'}`
 }
 
+function isNonWorkingDayType(value) {
+  const normalized = String(value || '').trim().toUpperCase()
+  return normalized === 'HOLIDAY' || normalized === 'REST_DAY' || normalized === 'SPECIAL_NON_WORKING'
+}
+
 function actualSegmentMinutes(actualIn, actualOut) {
   const aIn = hhmmToMinutes(actualIn)
   const aOut = hhmmToMinutes(actualOut)
@@ -210,7 +217,7 @@ function getActualWorkIntervalsFromRaw(raw) {
 
 function getRequiredScheduleIntervalsFromRaw(raw) {
   const specialDayType = String(raw?.SpecialDayType || '').trim().toUpperCase()
-  if (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') return []
+  if (isNonWorkingDayType(specialDayType)) return []
 
   const row = buildSourceRowForCalc(raw)
   return [
@@ -267,8 +274,8 @@ function computePolicyAwareWorkedMinutes(raw, overtimeEntries) {
     actualSegmentMinutes(fmtTime(raw.MorningTimeIn), fmtTime(raw.MorningTimeOut)) +
     actualSegmentMinutes(fmtTime(raw.AfternoonTimeIn), fmtTime(raw.AfternoonTimeOut))
 
-  // On holidays/rest days, worked hours only count when there is approved OT.
-  if (specialDayType === 'HOLIDAY' || specialDayType === 'REST_DAY') {
+  // On non-working days, worked hours only count when there is approved OT.
+  if (isNonWorkingDayType(specialDayType)) {
     return Math.min(actualMinutes, computePayableOvertimeMinutesForRow(raw, overtimeEntries))
   }
 
@@ -338,6 +345,12 @@ function statusMatches(statusText, filterValue) {
   }
   if (filterValue === 'holiday') {
     return s === 'holiday'
+  }
+  if (filterValue === 'special-day-worked') {
+    return s.includes('special non-working') && s.includes('worked')
+  }
+  if (filterValue === 'special-day') {
+    return s === 'special non-working day'
   }
   if (filterValue === 'rest-day-worked') {
     return (s.includes('rest day') || s.includes('rest-day')) && s.includes('worked')
@@ -574,6 +587,7 @@ function buildSummaryRows(sourceRows, employeeMetaById, overtimeEntries, leaveEn
     const groupKey = `${employeeId}:${yearMonth}`
     const specialDayType = String(raw.SpecialDayType || '').trim().toUpperCase()
     const isHoliday = specialDayType === 'HOLIDAY'
+    const isSpecialNonWorking = specialDayType === 'SPECIAL_NON_WORKING'
     const isRestDay = specialDayType === 'REST_DAY'
     const isHalfDaySpecial = specialDayType.startsWith('HALF_DAY')
     const calcRow = buildSourceRowForCalc(raw)
@@ -585,7 +599,7 @@ function buildSummaryRows(sourceRows, employeeMetaById, overtimeEntries, leaveEn
     const leaveImpact = getLeaveImpactForRow(
       leaveEntriesByKey.get(`${employeeId}:${date}`) || [],
       expectedSegments,
-      isHoliday || isRestDay ? 0 : (isHalfDaySpecial ? 0.5 : (expectedSegments.length > 0 ? 1 : 0))
+      isHoliday || isSpecialNonWorking || isRestDay ? 0 : (isHalfDaySpecial ? 0.5 : (expectedSegments.length > 0 ? 1 : 0))
     )
     const actualMinutesTotal =
       actualSegmentMinutes(calcRow.MorningTimeIn, calcRow.MorningTimeOut) +
@@ -596,7 +610,7 @@ function buildSummaryRows(sourceRows, employeeMetaById, overtimeEntries, leaveEn
     const overtimeMinutesNormal = Math.max(0, actualMinutesTotal - workedMinutes)
 
     let dueWeight = 0
-    if (isHoliday || isRestDay) {
+    if (isHoliday || isSpecialNonWorking || isRestDay) {
       dueWeight = 0
     } else if (isHalfDaySpecial) {
       dueWeight = 0.5
@@ -654,10 +668,10 @@ function buildSummaryRows(sourceRows, employeeMetaById, overtimeEntries, leaveEn
 
     acc.DueAttendanceDays += netDueWeight
     acc.ActualAttendanceDays += Math.min(netDueWeight, actualDayWeight)
-    acc.WorkingHours += isHoliday || isRestDay ? 0 : workedMinutes
+    acc.WorkingHours += isHoliday || isSpecialNonWorking || isRestDay ? 0 : workedMinutes
     acc.OTHours += isHoliday ? 0 : overtimeMinutes
-    acc.LateInMinutes += isHoliday || isRestDay ? 0 : lateMinutes
-    acc.EarlyOutMinutes += isHoliday || isRestDay ? 0 : earlyMinutes
+    acc.LateInMinutes += isHoliday || isSpecialNonWorking || isRestDay ? 0 : lateMinutes
+    acc.EarlyOutMinutes += isHoliday || isSpecialNonWorking || isRestDay ? 0 : earlyMinutes
     acc.PublicHolidayHours += isHoliday ? Math.min(actualMinutesTotal, overtimeMinutes) : 0
     acc.LeaveHours += leaveImpact.leaveMinutes
 

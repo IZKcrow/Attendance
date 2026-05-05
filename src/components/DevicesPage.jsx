@@ -28,12 +28,42 @@ export default function DevicesPage() {
     return d ? d.toLocaleString() : ''
   }, [parseDate])
 
-  const isOnline = React.useCallback((device) => {
-    if (!device?.IsActive) return false
+  const getDeviceStatus = React.useCallback((device) => {
+    if (!device?.IsActive) {
+      return {
+        label: 'OFFLINE',
+        background: 'rgba(148,163,184,0.18)',
+        color: '#334155',
+        title: 'Device is inactive'
+      }
+    }
+
     const lastSeen = parseDate(device?.LastSeenAt)
-    if (!lastSeen) return false
-    return (Date.now() - lastSeen.getTime()) <= ONLINE_THRESHOLD_MS
-  }, [ONLINE_THRESHOLD_MS, parseDate])
+    if (!lastSeen) {
+      return {
+        label: 'REGISTERED',
+        background: 'rgba(245,158,11,0.16)',
+        color: '#b45309',
+        title: 'Device is registered but has not sent a successful heartbeat yet'
+      }
+    }
+
+    if ((Date.now() - lastSeen.getTime()) <= ONLINE_THRESHOLD_MS) {
+      return {
+        label: 'ONLINE',
+        background: 'rgba(16,185,129,0.15)',
+        color: '#047857',
+        title: `Last seen: ${formatDateTime(lastSeen)}`
+      }
+    }
+
+    return {
+      label: 'OFFLINE',
+      background: 'rgba(148,163,184,0.18)',
+      color: '#334155',
+      title: `Last seen: ${formatDateTime(lastSeen)}`
+    }
+  }, [ONLINE_THRESHOLD_MS, formatDateTime, parseDate])
 
   React.useEffect(() => {
     let alive = true
@@ -322,7 +352,9 @@ export default function DevicesPage() {
         onAdd={handleAdd}
         onEdit={handleEdit}
         onDelete={() => {}}
-        renderRow={(row) => (
+        renderRow={(row) => {
+          const status = getDeviceStatus(row)
+          return (
           <>
             <TableCell>
               <Checkbox
@@ -340,12 +372,12 @@ export default function DevicesPage() {
                   borderRadius: 999,
                   fontSize: 12,
                   fontWeight: 700,
-                  background: isOnline(row) ? 'rgba(16,185,129,0.15)' : 'rgba(148,163,184,0.18)',
-                  color: isOnline(row) ? '#047857' : '#334155'
+                  background: status.background,
+                  color: status.color
                 }}
-                title={row?.LastSeenAt ? `Last seen: ${formatDateTime(row.LastSeenAt)}` : 'No heartbeat yet'}
+                title={status.title}
               >
-                {isOnline(row) ? 'ONLINE' : 'OFFLINE'}
+                {status.label}
               </span>
             </TableCell>
             <TableCell>
@@ -356,7 +388,8 @@ export default function DevicesPage() {
             <TableCell>{row.Port ?? ''}</TableCell>
             <TableCell>{formatDateTime(row.LastSeenAt)}</TableCell>
           </>
-        )}
+          )
+        }}
       />
     </>
   )

@@ -12,7 +12,6 @@ import Sidebar from './Sidebar'
 import EmployeeTable from './EmployeeTable'
 import Scheduler from './Scheduler'
 import UsersPage from './UsersPage'
-import AttendanceRecordsPage from './AttendanceRecordsPage'
 import GenerateReportPage from './GenerateReportPage'
 import DeviceAttendanceEventsPage from './DeviceAttendanceEventsPage'
 import ScheduleDetailsPage from './ScheduleDetailsPage'
@@ -33,7 +32,6 @@ const PAGE_TO_PATH = {
   devices: '/devices',
   'schedule-details': '/schedule-details',
   schedule: '/scheduler',
-  attendance: '/attendance',
   'attendance-report': '/attendance-report',
   'device-attendance-events': '/imported-logs',
   reports: '/reports',
@@ -54,7 +52,6 @@ const PAGE_TITLES = {
   devices: 'Devices',
   'schedule-details': 'Schedule Details',
   schedule: 'Scheduler',
-  attendance: 'Attendance Records',
   'attendance-report': 'Attendance Report',
   'device-attendance-events': 'Imported Device Logs',
   reports: 'Generate Report',
@@ -74,6 +71,7 @@ const getPageFromPath = (pathname) => {
   const normalized = normalizePath(pathname).toLowerCase()
   if (normalized === '/') return 'overview'
   if (normalized === '/biometric') return 'reports'
+  if (normalized === '/attendance') return 'attendance-report'
   return PATH_TO_PAGE[normalized] || 'overview'
 }
 
@@ -121,15 +119,13 @@ export default function Dashboard({ onLogout }) {
       case 'employees':
         return <EmployeeTable />
       case 'overview':
-        return <OverviewDashboard onOpenAttendance={() => navigateToPage('attendance')} />
+        return <OverviewDashboard onOpenAttendanceReport={() => navigateToPage('attendance-report')} />
       case 'users':
         return <UsersPage />
       case 'devices':
         return <DevicesPage />
       case 'schedule-details':
         return <ScheduleDetailsPage />
-      case 'attendance':
-        return <AttendanceRecordsPage />
       case 'attendance-report':
         return <AttendanceReportPage />
       case 'device-attendance-events':

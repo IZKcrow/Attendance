@@ -81,7 +81,9 @@ export default function GenericDataTable({
   useDeleteDialog = true,
   defaultFormValues = {},
   showRowDelete = false,
-  canDeleteRow = null
+  canDeleteRow = null,
+  canEditRow = null,
+  actionsLabel = 'Actions'
 }) {
   const { show, SnackbarComponent } = useSnackbar()
   // Per-row delete is intentionally hidden (bulk deletion is used instead).
@@ -299,7 +301,7 @@ export default function GenericDataTable({
                   {col.header ? col.header : <strong>{col.label}</strong>}
                 </TableCell>
               ))}
-              {showActions && <TableCell align="right" sx={{ minWidth: 110 }}><strong>Actions</strong></TableCell>}
+              {showActions && <TableCell align="right" sx={{ minWidth: 110 }}><strong>{actionsLabel}</strong></TableCell>}
             </TableRow>
           </TableHead>
           <TableBody>
@@ -320,7 +322,7 @@ export default function GenericDataTable({
                 <TableCell align="right">
                   {(
                     <>
-                      {allowEdit && (
+                      {allowEdit && (typeof canEditRow === 'function' ? canEditRow(row) : true) && (
                         <IconButton size="small" onClick={(e) => { e.stopPropagation(); handleOpenEdit(row) }}><EditIcon fontSize="small" /></IconButton>
                       )}
                       {showRowDelete && allowDelete && (

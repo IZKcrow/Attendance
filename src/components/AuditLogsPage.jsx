@@ -1,10 +1,8 @@
 ﻿//AuditLogsPage.jsx
 import React from 'react'
-import { TableCell, Box } from '@mui/material'
+import { TableCell, Box, Button } from '@mui/material'
 import GenericDataTable from './GenericDataTable'
 import * as api from '../api'
-import { Bar } from 'react-chartjs-2'
-import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js'
 import LocalizationProvider from '@mui/lab/LocalizationProvider'
 import DateRangePicker from '@mui/lab/DateRangePicker'
 import AdapterDateFns from '@mui/lab/AdapterDateFns'
@@ -41,8 +39,6 @@ function fmtDateTime(value) {
   if (time === '-') return date
   return `${date} ${time}`
 }
-
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 export default function AuditLogsPage() {
   const [logs, setLogs] = React.useState([])
@@ -81,22 +77,9 @@ export default function AuditLogsPage() {
     return true
   })
 
-  const chartData = React.useMemo(() => {
-    const map = {}
-    filtered.forEach((s) => {
-      const d = s.CreatedAt ? new Date(s.CreatedAt).toISOString().split('T')[0] : 'unknown'
-      map[d] = (map[d] || 0) + 1
-    })
-    const keys = Object.keys(map).sort()
-    return {
-      labels: keys,
-      datasets: [{ label: 'Events', data: keys.map((k) => map[k]), backgroundColor: '#3f51b5' }]
-    }
-  }, [filtered])
-
   return (
-    <div>
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginBottom: 8 }}>
+    <Box>
+      <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mb: 1, flexWrap: 'wrap' }}>
         <LocalizationProvider dateAdapter={AdapterDateFns}>
           <DateRangePicker
             startText="From"
@@ -130,46 +113,39 @@ export default function AuditLogsPage() {
             )}
           />
         </LocalizationProvider>
-        <button
+      </Box>
+
+      <GenericDataTable
+        title="Audit Logs"
+        columns={['Admin', 'Action', 'Table', 'Created At']}
+        data={filtered}
+        loading={loading}
+        error={error}
+        primaryKeyField="AuditLogID"
+        readOnly={true}
+        onAdd={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
+        renderRow={(row) => (
+          <>
+            <TableCell>{row.Actor || '-'}</TableCell>
+            <TableCell>{row.Action}</TableCell>
+            <TableCell>{row.TableName}</TableCell>
+            <TableCell>{fmtDateTime(row.CreatedAt)}</TableCell>
+          </>
+        )}
+      />
+
+      <Box sx={{ display: 'flex', justifyContent: 'flex-start', mt: 1 }}>
+        <Button
+          variant="outlined"
           onClick={() => {
             setDateRange([null, null])
           }}
         >
           Clear
-        </button>
-      </div>
-
-      <div style={{ display: 'flex', gap: 16 }}>
-        <div style={{ flex: 1 }}>
-          <GenericDataTable
-            title="Audit Logs"
-            columns={['Admin', 'Action', 'Table', 'Created At']}
-            data={filtered}
-            loading={loading}
-            error={error}
-            primaryKeyField="AuditLogID"
-            readOnly={true}
-            onAdd={() => {}}
-            onEdit={() => {}}
-            onDelete={() => {}}
-            renderRow={(row) => (
-              <>
-                <TableCell>{row.Actor || '-'}</TableCell>
-                <TableCell>{row.Action}</TableCell>
-                <TableCell>{row.TableName}</TableCell>
-                <TableCell>{fmtDateTime(row.CreatedAt)}</TableCell>
-              </>
-            )}
-          />
-        </div>
-
-        <div style={{ width: 360 }}>
-          <h4>Events</h4>
-          <Box>
-            <Bar data={chartData} options={{ responsive: true, plugins: { legend: { display: false } } }} />
-          </Box>
-        </div>
-      </div>
-    </div>
+        </Button>
+      </Box>
+    </Box>
   )
 }

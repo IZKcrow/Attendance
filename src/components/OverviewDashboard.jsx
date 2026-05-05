@@ -219,7 +219,7 @@ function computeComparisonStats(records, refNow = new Date()) {
   return { onTime, late, absent, totalLogs: records.length }
 }
 
-export default function OverviewDashboard({ onOpenAttendance }) {
+export default function OverviewDashboard({ onOpenAttendanceReport }) {
   const [overviewRecords, setOverviewRecords] = React.useState([])
   const [todayRecords, setTodayRecords] = React.useState([])
   const [employees, setEmployees] = React.useState([])
@@ -674,8 +674,8 @@ export default function OverviewDashboard({ onOpenAttendance }) {
           </Box>
         )}
         <Box sx={{ mt: 1.5, display: 'flex', justifyContent: 'flex-end' }}>
-          <Button size="small" variant="outlined" onClick={() => onOpenAttendance?.()}>
-            View Full Attendance Logs
+          <Button size="small" variant="outlined" onClick={() => onOpenAttendanceReport?.()}>
+            View Attendance Report
           </Button>
         </Box>
       </Paper>

@@ -21,9 +21,11 @@ function replacePath(path) {
 export default function RegisterAdminPage({ onSuccess }) {
   const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams()
   const token = (params.get('token') || '').trim()
+  const invitedUsername = (params.get('username') || '').trim()
   const invitedEmail = (params.get('email') || '').trim()
 
   const [hasAdmin, setHasAdmin] = React.useState(null)
+  const [username, setUsername] = React.useState(() => invitedUsername)
   const [email, setEmail] = React.useState(() => invitedEmail)
   const [password, setPassword] = React.useState('')
   const [confirm, setConfirm] = React.useState('')
@@ -44,7 +46,9 @@ export default function RegisterAdminPage({ onSuccess }) {
     e.preventDefault()
     setError(null)
 
+    const user = username.trim().toLowerCase()
     const em = email.trim().toLowerCase()
+    if (!user) return setError('Enter a username.')
     if (!em || !em.includes('@')) return setError('Enter a valid email.')
     if (!password || password.length < 8) return setError('Password must be at least 8 characters.')
     if (password !== confirm) return setError('Passwords do not match.')
@@ -52,8 +56,8 @@ export default function RegisterAdminPage({ onSuccess }) {
     setLoading(true)
     try {
       const res = token
-        ? await api.registerAdminWithToken(token, em, password)
-        : await api.setupAdmin(em, password)
+        ? await api.registerAdminWithToken(token, user, em, password)
+        : await api.setupAdmin(user, em, password)
 
       if (res?.token) {
         setStoredAuthToken(res.token)
@@ -71,7 +75,7 @@ export default function RegisterAdminPage({ onSuccess }) {
   const blocked = !token && hasAdmin === true
   const title = token ? 'Accept Admin Invitation' : 'Set Up Admin'
   const description = token
-    ? 'Use this invite token to create your admin account locally. Pasted invitation links work even when email sending is disabled.'
+    ? 'Use this invite token to create your admin account locally with a username for login and an email for audit history.'
     : 'Create the first admin account for this local installation.'
 
   return (
@@ -135,6 +139,13 @@ export default function RegisterAdminPage({ onSuccess }) {
         )}
 
         <form onSubmit={submit}>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Admin username"
+            style={input}
+            disabled={loading}
+          />
           <input
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -204,6 +215,7 @@ const input = {
   color: '#f8fbff',
   fontWeight: 600,
   outline: 'none',
-  boxShadow: 'inset 0 0 0 1px rgba(10,20,40,0.25)'
+  boxShadow: 'inset 0 0 0 1px rgba(10,20,40,0.25)',
+  fontFamily: 'inherit'
 }
 

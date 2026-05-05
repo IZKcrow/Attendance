@@ -4,6 +4,7 @@ import { setStoredAuthToken } from '../authStorage'
 import DarkVeil from './ui/DarkVeil'
 
 export default function LoginPage({ onSuccess }) {
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -43,15 +44,16 @@ export default function LoginPage({ onSuccess }) {
     e.preventDefault()
     clearError()
 
+    const trimmedUsername = username.trim().toLowerCase()
     const trimmedEmail = email.trim().toLowerCase()
-    if (!trimmedEmail || !password.trim()) {
-      setError(isSetupMode ? 'Please enter your admin email and password.' : 'Please enter both email and password.')
+    if (!trimmedUsername || !password.trim()) {
+      setError(isSetupMode ? 'Please enter your username and password.' : 'Please enter both user and password.')
       return
     }
 
     if (isSetupMode) {
-      if (!trimmedEmail.includes('@')) {
-        setError('Enter a valid email.')
+      if (!trimmedEmail || !trimmedEmail.includes('@')) {
+        setError('Please enter a valid admin email.')
         return
       }
       if (password.length < 8) {
@@ -68,18 +70,18 @@ export default function LoginPage({ onSuccess }) {
       setLoading(true)
 
       if (isSetupMode) {
-        const data = await setupAdmin(trimmedEmail, password)
+        const data = await setupAdmin(trimmedUsername, trimmedEmail, password)
         setStoredAuthToken(data.token)
         onSuccess?.(data)
         return
       }
 
-      const data = await login(trimmedEmail, password)
+      const data = await login(trimmedUsername, password)
       setStoredAuthToken(data.token)
       onSuccess?.(data)
     } catch (err) {
       if (!isSetupMode && err?.status === 401) {
-        setError('Invalid email or password.')
+        setError('Invalid user or password.')
       } else if (err?.message) {
         setError(err.message)
       } else {
@@ -171,15 +173,29 @@ export default function LoginPage({ onSuccess }) {
         <form onSubmit={submit}>
           <input
             className="login-glass-input"
-            value={email}
+            value={username}
             onChange={(e) => {
-              setEmail(e.target.value)
+              setUsername(e.target.value)
               clearError()
             }}
-            placeholder="Admin email"
+            placeholder="Username"
             style={input}
             disabled={loading || isCheckingSetup}
           />
+          {isSetupMode && (
+            <input
+              className="login-glass-input"
+              type="email"
+              value={email}
+              onChange={(e) => {
+                setEmail(e.target.value)
+                clearError()
+              }}
+              placeholder="Admin email"
+              style={input}
+              disabled={loading || isCheckingSetup}
+            />
+          )}
           <input
             className="login-glass-input"
             type="password"
@@ -249,5 +265,6 @@ const input = {
   color: '#f8fbff',
   fontWeight: 600,
   outline: 'none',
-  boxShadow: 'inset 0 0 0 1px rgba(10,20,40,0.25)'
+  boxShadow: 'inset 0 0 0 1px rgba(10,20,40,0.25)',
+  fontFamily: 'inherit'
 }
