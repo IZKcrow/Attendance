@@ -333,6 +333,21 @@ function toTimeLiteral(value) {
   return null
 }
 
+function formatDateOnly(value) {
+  if (!value) return null
+  if (typeof value === 'string') {
+    const match = value.match(/\d{4}-\d{2}-\d{2}/)
+    if (match) return match[0]
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getFullYear()
+    const month = String(value.getMonth() + 1).padStart(2, '0')
+    const day = String(value.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+  return null
+}
+
 function stripBom(text) {
   if (!text) return ''
   if (text.charCodeAt(0) === 0xFEFF) return text.slice(1)
@@ -493,6 +508,28 @@ function splitName(name) {
   return { firstName, lastName }
 }
 
+function mergeEmployeeImportRecord(current, incoming) {
+  if (!current) return { ...incoming }
+  const next = { ...current }
+  const pick = (value) => String(value ?? '').trim()
+
+  const incomingName = pick(incoming.rawName)
+  const incomingDepartment = pick(incoming.department)
+  const incomingPosition = pick(incoming.position)
+  const incomingStaffCode = pick(incoming.staffCodeRaw)
+  const incomingStaffCodeNormalized = pick(incoming.staffCodeNormalized)
+  const incomingUserId = pick(incoming.userIdRaw)
+
+  if (!pick(next.rawName) && incomingName) next.rawName = incoming.rawName
+  if (!pick(next.department) && incomingDepartment) next.department = incoming.department
+  if (!pick(next.position) && incomingPosition) next.position = incoming.position
+  if (!pick(next.staffCodeRaw) && incomingStaffCode) next.staffCodeRaw = incoming.staffCodeRaw
+  if (!pick(next.staffCodeNormalized) && incomingStaffCodeNormalized) next.staffCodeNormalized = incoming.staffCodeNormalized
+  if (!pick(next.userIdRaw) && incomingUserId) next.userIdRaw = incoming.userIdRaw
+
+  return next
+}
+
 async function writeAuditLog(pool, payload) {
   try {
     const req = pool.request()
@@ -633,7 +670,7 @@ BEGIN
     MorningTimeOut TIME(7) NULL,
     AfternoonTimeIn TIME(7) NULL,
     AfternoonTimeOut TIME(7) NULL,
-    GracePeriodMinutes INT DEFAULT 5,
+    GracePeriodMinutes INT DEFAULT 0,
     CreatedAt DATETIME DEFAULT GETDATE(),
     UpdatedAt DATETIME NULL
   )
@@ -766,6 +803,7 @@ BEGIN
     MorningTimeOut TIME(7) NULL,
     AfternoonTimeIn TIME(7) NULL,
     AfternoonTimeOut TIME(7) NULL,
+    Remarks NVARCHAR(500) NULL,
     MinutesLate INT DEFAULT 0,
     MinutesEarlyLeave INT DEFAULT 0,
     Status NVARCHAR(50) NULL,
@@ -946,6 +984,10 @@ BEGIN
     StartTime TIME(7) NULL,
     EndTime TIME(7) NULL,
     ApprovedMinutes INT NULL,
+    OTPunchInTime TIME(7) NULL,
+    OTPunchOutTime TIME(7) NULL,
+    OfficialPunchInTime TIME(7) NULL,
+    OfficialPunchOutTime TIME(7) NULL,
     OvertimeType NVARCHAR(50) NOT NULL DEFAULT 'REGULAR',
     Reason NVARCHAR(255) NULL,
     Status NVARCHAR(30) NOT NULL DEFAULT 'APPROVED',
@@ -1027,10 +1069,9 @@ END`,
     a.AttendanceDate,
     a.MorningTimeIn,
     s.MorningTimeIn AS RequiredMorningIn,
-    s.GracePeriodMinutes,
     CASE 
       WHEN a.MorningTimeIn IS NULL THEN 'Absent'
-      WHEN a.MorningTimeIn > DATEADD(MINUTE, s.GracePeriodMinutes, s.MorningTimeIn)
+      WHEN a.MorningTimeIn > s.MorningTimeIn
         THEN 'Late'
       ELSE 'On-Time'
     END AS MorningStatus
@@ -1161,6 +1202,11 @@ BEGIN
   ALTER TABLE dbo.Devices ADD DevicePassword INT NULL
 END`
     ,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AttendanceRecords') AND name = 'Remarks')
+BEGIN
+  ALTER TABLE dbo.AttendanceRecords ADD Remarks NVARCHAR(500) NULL
+END`
+    ,
       `IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'SpecialDays' AND schema_id = SCHEMA_ID('dbo'))
 BEGIN
   CREATE TABLE dbo.SpecialDays (
@@ -1198,6 +1244,10 @@ BEGIN
     StartTime TIME(7) NULL,
     EndTime TIME(7) NULL,
     ApprovedMinutes INT NULL,
+    OTPunchInTime TIME(7) NULL,
+    OTPunchOutTime TIME(7) NULL,
+    OfficialPunchInTime TIME(7) NULL,
+    OfficialPunchOutTime TIME(7) NULL,
     OvertimeType NVARCHAR(50) NOT NULL DEFAULT 'REGULAR',
     Reason NVARCHAR(255) NULL,
     Status NVARCHAR(30) NOT NULL DEFAULT 'APPROVED',
@@ -1244,6 +1294,22 @@ END`,
       `IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AdminLeaveEntries_EmployeeDateRange' AND object_id = OBJECT_ID('dbo.AdminLeaveEntries'))
 BEGIN
   CREATE INDEX IX_AdminLeaveEntries_EmployeeDateRange ON dbo.AdminLeaveEntries(EmployeeID, LeaveStartDate, LeaveEndDate)
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AdminOvertimeEntries') AND name = 'OfficialPunchInTime')
+BEGIN
+  ALTER TABLE dbo.AdminOvertimeEntries ADD OfficialPunchInTime TIME(7) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AdminOvertimeEntries') AND name = 'OfficialPunchOutTime')
+BEGIN
+  ALTER TABLE dbo.AdminOvertimeEntries ADD OfficialPunchOutTime TIME(7) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AdminOvertimeEntries') AND name = 'OTPunchInTime')
+BEGIN
+  ALTER TABLE dbo.AdminOvertimeEntries ADD OTPunchInTime TIME(7) NULL
+END`,
+      `IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('dbo.AdminOvertimeEntries') AND name = 'OTPunchOutTime')
+BEGIN
+  ALTER TABLE dbo.AdminOvertimeEntries ADD OTPunchOutTime TIME(7) NULL
 END`,
       `IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.ShiftDefinitions') AND name = 'MorningTimeOut' AND is_nullable = 0)
 BEGIN
@@ -2259,7 +2325,7 @@ app.post('/shift-definitions', async (req, res) => {
     const pool = await getPool()
     const { randomUUID } = require('crypto')
     const shiftID = randomUUID()
-    const grace = Number.isFinite(Number(GracePeriodMinutes)) ? Number(GracePeriodMinutes) : 5
+    const grace = 0
 
     const mapDay = {
       monday: 1,
@@ -2436,7 +2502,7 @@ app.get('/shift-definitions', async (req, res) => {
         CONVERT(varchar(5), s.MorningTimeOut, 108) AS MorningTimeOut,
         CONVERT(varchar(5), s.AfternoonTimeIn, 108) AS AfternoonTimeIn,
         CONVERT(varchar(5), s.AfternoonTimeOut, 108) AS AfternoonTimeOut,
-        ISNULL(s.GracePeriodMinutes, 5) AS GracePeriodMinutes,
+        ISNULL(s.GracePeriodMinutes, 0) AS GracePeriodMinutes,
         (SELECT STUFF((SELECT ',' + CAST(sd.DayOfWeek AS nvarchar(3)) FROM dbo.ShiftDays sd WHERE sd.ShiftID = s.ShiftID ORDER BY sd.DayOfWeek FOR XML PATH('')),1,1,'')) AS DayList,
         (SELECT STUFF((SELECT ',' + CASE sd.DayOfWeek
             WHEN 1 THEN 'Mon' WHEN 2 THEN 'Tue' WHEN 3 THEN 'Wed' WHEN 4 THEN 'Thu'
@@ -2452,7 +2518,7 @@ app.get('/shift-definitions', async (req, res) => {
         CONVERT(varchar(5), MorningTimeOut, 108) AS MorningTimeOut,
         CONVERT(varchar(5), AfternoonTimeIn, 108) AS AfternoonTimeIn,
         CONVERT(varchar(5), AfternoonTimeOut, 108) AS AfternoonTimeOut,
-        ISNULL(GracePeriodMinutes, 5) AS GracePeriodMinutes
+        ISNULL(GracePeriodMinutes, 0) AS GracePeriodMinutes
       FROM dbo.ShiftDaySchedules
       ORDER BY DayOfWeek
     `)
@@ -2551,7 +2617,7 @@ app.get('/schedule-periods', async (req, res) => {
       CONVERT(varchar(5), s.MorningTimeOut, 108) AS MorningTimeOut,
       CONVERT(varchar(5), s.AfternoonTimeIn, 108) AS AfternoonTimeIn,
       CONVERT(varchar(5), s.AfternoonTimeOut, 108) AS AfternoonTimeOut,
-      ISNULL(s.GracePeriodMinutes, 5) AS GracePeriodMinutes,
+      ISNULL(s.GracePeriodMinutes, 0) AS GracePeriodMinutes,
       (SELECT STUFF((SELECT ',' + CAST(sd.DayOfWeek AS nvarchar(3)) FROM dbo.ShiftDays sd WHERE sd.ShiftID = s.ShiftID ORDER BY sd.DayOfWeek FOR XML PATH('')),1,1,'')) AS DayList,
       (SELECT STUFF((SELECT ',' + CASE sd.DayOfWeek
           WHEN 1 THEN 'Mon' WHEN 2 THEN 'Tue' WHEN 3 THEN 'Wed' WHEN 4 THEN 'Thu'
@@ -2565,7 +2631,7 @@ app.get('/schedule-periods', async (req, res) => {
         CONVERT(varchar(5), MorningTimeOut, 108) AS MorningTimeOut,
         CONVERT(varchar(5), AfternoonTimeIn, 108) AS AfternoonTimeIn,
         CONVERT(varchar(5), AfternoonTimeOut, 108) AS AfternoonTimeOut,
-        ISNULL(GracePeriodMinutes, 5) AS GracePeriodMinutes
+        ISNULL(GracePeriodMinutes, 0) AS GracePeriodMinutes
       FROM dbo.ShiftDaySchedules
       ORDER BY DayOfWeek
     `)
@@ -2601,7 +2667,7 @@ app.get('/schedule-periods', async (req, res) => {
       MorningTimeOut: r.MorningTimeOut,
       AfternoonTimeIn: r.AfternoonTimeIn,
       AfternoonTimeOut: r.AfternoonTimeOut,
-      GracePeriodMinutes: r.GracePeriodMinutes || 5,
+      GracePeriodMinutes: r.GracePeriodMinutes || 0,
       PatternDetails: Object.values(grouped).map((g, idx) => ({
         PatternName: `Pattern ${idx + 1}`,
         ...g,
@@ -3073,30 +3139,177 @@ function getNextAttendanceLogType(att) {
   return null
 }
 
+async function fetchAssignedShiftForEmployeeDate(pool, employeeID, attendanceDate) {
+  const dateText = formatDateOnly(attendanceDate)
+  if (!employeeID || !dateText) return null
+
+  const day = new Date(`${dateText}T00:00:00`)
+  const attendanceDay = day.getDay() === 0 ? 7 : day.getDay()
+
+  const result = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeID)
+    .input('AttendanceDate', sql.Date, dateText)
+    .input('AttendanceDay', sql.Int, attendanceDay)
+    .query(`
+      SELECT TOP 1
+        s.ShiftID,
+        s.ShiftName,
+        CONVERT(varchar(8), COALESCE(dss.MorningTimeIn, s.MorningTimeIn), 108) AS ReqMorningIn,
+        CONVERT(varchar(8), COALESCE(dss.MorningTimeOut, s.MorningTimeOut), 108) AS ReqMorningOut,
+        CONVERT(varchar(8), COALESCE(dss.AfternoonTimeIn, s.AfternoonTimeIn), 108) AS ReqAfternoonIn,
+        CONVERT(varchar(8), COALESCE(dss.AfternoonTimeOut, s.AfternoonTimeOut), 108) AS ReqAfternoonOut
+      FROM dbo.EmployeeShiftAllotments sa
+      JOIN dbo.ShiftDefinitions s
+        ON sa.ShiftID = s.ShiftID
+      LEFT JOIN dbo.ShiftDays sd
+        ON sd.ShiftID = s.ShiftID
+       AND sd.DayOfWeek = @AttendanceDay
+      LEFT JOIN dbo.ShiftDaySchedules dss
+        ON dss.ShiftID = s.ShiftID
+       AND dss.DayOfWeek = ISNULL(sd.DayOfWeek, @AttendanceDay)
+      WHERE sa.EmployeeID = @EmployeeID
+        AND @AttendanceDate BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, @AttendanceDate)
+        AND (sd.DayOfWeek IS NULL OR sd.DayOfWeek = @AttendanceDay)
+      ORDER BY sa.EffectiveFrom DESC
+    `)
+
+  return result.recordset[0] || null
+}
+
+function calculateAttendanceMetrics(attendance = {}, shift = null) {
+  const segments = [
+    {
+      actualIn: attendance.MorningTimeIn,
+      actualOut: attendance.MorningTimeOut,
+      requiredIn: shift?.ReqMorningIn || shift?.MorningTimeIn || null,
+      requiredOut: shift?.ReqMorningOut || shift?.MorningTimeOut || null
+    },
+    {
+      actualIn: attendance.AfternoonTimeIn,
+      actualOut: attendance.AfternoonTimeOut,
+      requiredIn: shift?.ReqAfternoonIn || shift?.AfternoonTimeIn || null,
+      requiredOut: shift?.ReqAfternoonOut || shift?.AfternoonTimeOut || null
+    }
+  ]
+
+  let minutesLate = 0
+  let minutesEarlyLeave = 0
+  let hasAnyPunch = false
+  let hasMismatchedPunch = false
+  let completedSegmentCount = 0
+  let emptySegmentCount = 0
+  let requiredSegmentCount = 0
+
+  for (const segment of segments) {
+    const actualIn = timeLiteralToMinutes(segment.actualIn)
+    const actualOut = timeLiteralToMinutes(segment.actualOut)
+    const requiredIn = timeLiteralToMinutes(segment.requiredIn)
+    const requiredOut = timeLiteralToMinutes(segment.requiredOut)
+
+    const hasActualIn = actualIn != null
+    const hasActualOut = actualOut != null
+    const hasPunch = hasActualIn || hasActualOut
+    const hasCompletePunch = hasActualIn && hasActualOut
+    const hasRequiredSchedule = requiredIn != null || requiredOut != null
+
+    if (hasRequiredSchedule) requiredSegmentCount += 1
+    if (hasPunch) hasAnyPunch = true
+    if (hasActualIn !== hasActualOut) hasMismatchedPunch = true
+
+    if (hasCompletePunch) {
+      completedSegmentCount += 1
+    } else if (!hasPunch) {
+      emptySegmentCount += 1
+    }
+
+    if (hasActualIn && requiredIn != null) {
+      minutesLate += Math.max(0, actualIn - requiredIn)
+    }
+    if (hasActualOut && requiredOut != null) {
+      minutesEarlyLeave += Math.max(0, requiredOut - actualOut)
+    }
+  }
+
+  let status = 'On-Time'
+  if (!hasAnyPunch) {
+    status = 'Absent'
+  } else if (hasMismatchedPunch) {
+    status = 'Incomplete'
+  } else if (minutesLate > 0) {
+    status = 'Late'
+  } else if (minutesEarlyLeave > 0) {
+    status = 'Early Leave'
+  } else if (requiredSegmentCount > 1 && completedSegmentCount === 1 && emptySegmentCount >= 1) {
+    status = 'Half-Day'
+  }
+
+  return {
+    status,
+    minutesLate,
+    minutesEarlyLeave
+  }
+}
+
+async function recalculateAttendanceRecord(pool, { attendanceID = null, employeeID = null, attendanceDate = null } = {}) {
+  let record = null
+
+  if (attendanceID) {
+    const row = await pool.request()
+      .input('AttendanceID', sql.NVarChar(36), attendanceID)
+      .query('SELECT TOP 1 * FROM dbo.AttendanceRecords WHERE AttendanceID=@AttendanceID')
+    record = row.recordset[0] || null
+  } else {
+    const dateText = formatDateOnly(attendanceDate)
+    if (!employeeID || !dateText) return null
+    const row = await pool.request()
+      .input('EmployeeID', sql.NVarChar(36), employeeID)
+      .input('AttendanceDate', sql.Date, dateText)
+      .query('SELECT TOP 1 * FROM dbo.AttendanceRecords WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate')
+    record = row.recordset[0] || null
+  }
+
+  if (!record) return null
+
+  const dateText = formatDateOnly(record.AttendanceDate)
+  const shift = record.EmployeeID && dateText
+    ? await fetchAssignedShiftForEmployeeDate(pool, String(record.EmployeeID), dateText)
+    : null
+  const metrics = calculateAttendanceMetrics(record, shift)
+
+  const updated = await pool.request()
+    .input('AttendanceID', sql.NVarChar(36), record.AttendanceID)
+    .input('Status', sql.NVarChar(50), metrics.status)
+    .input('MinutesLate', sql.Int, metrics.minutesLate)
+    .input('MinutesEarlyLeave', sql.Int, metrics.minutesEarlyLeave)
+    .query(`
+      UPDATE dbo.AttendanceRecords
+      SET Status = @Status,
+          MinutesLate = @MinutesLate,
+          MinutesEarlyLeave = @MinutesEarlyLeave
+      WHERE AttendanceID = @AttendanceID;
+
+      SELECT TOP 1 *
+      FROM dbo.AttendanceRecords
+      WHERE AttendanceID = @AttendanceID;
+    `)
+
+  return updated.recordset[0] || {
+    ...record,
+    Status: metrics.status,
+    MinutesLate: metrics.minutesLate,
+    MinutesEarlyLeave: metrics.minutesEarlyLeave
+  }
+}
+
 async function processAttendanceLog(pool, { employeeID, logType, now = new Date() }) {
   const todayStr = now.toISOString().split('T')[0]
   const currentTime = now.toTimeString().split(' ')[0]
-  const todayDay = now.getDay() === 0 ? 7 : now.getDay()
-
-  const shiftResult = await pool.request()
-    .input('EmployeeID', sql.NVarChar(36), employeeID)
-    .input('Today', sql.Date, todayStr)
-    .input('TodayDay', sql.Int, todayDay)
-    .query(`
-      SELECT s.*
-      FROM dbo.EmployeeShiftAllotments a
-      JOIN dbo.ShiftDefinitions s ON a.ShiftID = s.ShiftID
-      JOIN dbo.ShiftDays sd ON sd.ShiftID = s.ShiftID
-      WHERE a.EmployeeID=@EmployeeID
-      AND @Today BETWEEN a.EffectiveFrom AND ISNULL(a.EffectiveTo, @Today)
-      AND sd.DayOfWeek=@TodayDay
-    `)
-  if (!shiftResult.recordset.length) {
+  const shift = await fetchAssignedShiftForEmployeeDate(pool, employeeID, todayStr)
+  if (!shift) {
     const err = new Error('No shift assigned for this employee today')
     err.statusCode = 400
     throw err
   }
-  const shift = shiftResult.recordset[0]
 
   await pool.request()
     .input('EmployeeID', sql.NVarChar(36), employeeID)
@@ -3109,48 +3322,6 @@ async function processAttendanceLog(pool, { employeeID, logType, now = new Date(
       INSERT INTO dbo.AttendanceRecords(EmployeeID, AttendanceDate)
       VALUES(@EmployeeID, @AttendanceDate)
     `)
-
-  let minutesLate = 0
-  let minutesEarly = 0
-  let status = 'On-Time'
-
-  const calcLate = async (requiredTime) => {
-    if (!requiredTime) return 0
-    const diff = await pool.request()
-      .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
-      .input('Required', sql.NVarChar(8), toTimeLiteral(requiredTime))
-      .query(`SELECT DATEDIFF(MINUTE, CAST(@Required AS TIME(7)), CAST(@Actual AS TIME(7))) AS diff`)
-    return Math.max(0, diff.recordset[0].diff - (shift.GracePeriodMinutes || 0))
-  }
-
-  const calcEarlyLeave = async (requiredTime) => {
-    if (!requiredTime) return 0
-    const diff = await pool.request()
-      .input('Actual', sql.NVarChar(8), parseTimeString(currentTime))
-      .input('Required', sql.NVarChar(8), toTimeLiteral(requiredTime))
-      .query(`SELECT DATEDIFF(MINUTE, CAST(@Actual AS TIME(7)), CAST(@Required AS TIME(7))) AS diff`)
-    return Math.max(0, diff.recordset[0].diff)
-  }
-
-  if (logType === 'MORNING_IN') {
-    minutesLate = await calcLate(shift.MorningTimeIn)
-    if (minutesLate > 0) status = 'Late'
-  }
-
-  if (logType === 'AFTERNOON_IN') {
-    minutesLate = await calcLate(shift.AfternoonTimeIn)
-    if (minutesLate > 0) status = 'Late'
-  }
-
-  if (logType === 'MORNING_OUT') {
-    minutesEarly = await calcEarlyLeave(shift.MorningTimeOut)
-    if (minutesEarly > 0) status = 'Early Leave'
-  }
-
-  if (logType === 'AFTERNOON_OUT') {
-    minutesEarly = await calcEarlyLeave(shift.AfternoonTimeOut)
-    if (minutesEarly > 0) status = 'Early Leave'
-  }
 
   const columnMap = {
     MORNING_IN: 'MorningTimeIn',
@@ -3169,20 +3340,26 @@ async function processAttendanceLog(pool, { employeeID, logType, now = new Date(
     .input('EmployeeID', sql.NVarChar(36), employeeID)
     .input('AttendanceDate', sql.Date, todayStr)
     .input('TimeValue', sql.NVarChar(8), parseTimeString(currentTime))
-    .input('MinutesLate', sql.Int, minutesLate)
-    .input('MinutesEarly', sql.Int, minutesEarly)
-    .input('Status', sql.NVarChar(50), status)
     .query(`
       UPDATE dbo.AttendanceRecords
-      SET ${column}=CAST(@TimeValue AS TIME(7)),
-          MinutesLate = MinutesLate + @MinutesLate,
-          MinutesEarlyLeave = MinutesEarlyLeave + @MinutesEarly,
-          Status=@Status
+      SET ${column}=CAST(@TimeValue AS TIME(7))
       WHERE EmployeeID=@EmployeeID
       AND AttendanceDate=@AttendanceDate
     `)
 
-  return { logType, time: currentTime, minutesLate, minutesEarly, status, attendanceDate: todayStr }
+  const updated = await recalculateAttendanceRecord(pool, {
+    employeeID,
+    attendanceDate: todayStr
+  })
+
+  return {
+    logType,
+    time: currentTime,
+    minutesLate: Number(updated?.MinutesLate || 0),
+    minutesEarly: Number(updated?.MinutesEarlyLeave || 0),
+    status: updated?.Status || 'On-Time',
+    attendanceDate: todayStr
+  }
 }
 
 async function updateAttendanceRecord(pool, id, body = {}) {
@@ -3223,6 +3400,11 @@ async function updateAttendanceRecord(pool, id, body = {}) {
   timeField('AfternoonTimeIn', 'AfternoonTimeIn')
   timeField('AfternoonTimeOut', 'AfternoonTimeOut')
 
+  if (body.Remarks !== undefined) {
+    req.input('Remarks', sql.NVarChar(500), String(body.Remarks || '').trim() || null)
+    setClauses.push('Remarks = @Remarks')
+  }
+
   if (body.Status !== undefined) {
     req.input('Status', sql.NVarChar(50), body.Status || null)
     setClauses.push('Status = @Status')
@@ -3250,6 +3432,7 @@ async function updateAttendanceRecord(pool, id, body = {}) {
     const mOut = parseOptTime(body.MorningTimeOut)
     const aIn = parseOptTime(body.AfternoonTimeIn)
     const aOut = parseOptTime(body.AfternoonTimeOut)
+    const remarks = body.Remarks !== undefined ? (String(body.Remarks || '').trim() || null) : null
     const status = body.Status !== undefined ? (body.Status || null) : null
 
     const result = await pool.request()
@@ -3259,6 +3442,7 @@ async function updateAttendanceRecord(pool, id, body = {}) {
       .input('MorningTimeOut', sql.VarChar(8), mOut)
       .input('AfternoonTimeIn', sql.VarChar(8), aIn)
       .input('AfternoonTimeOut', sql.VarChar(8), aOut)
+      .input('Remarks', sql.NVarChar(500), remarks)
       .input('Status', sql.NVarChar(50), status)
       .query(`
         IF EXISTS (
@@ -3272,13 +3456,14 @@ async function updateAttendanceRecord(pool, id, body = {}) {
             MorningTimeOut = CASE WHEN @MorningTimeOut IS NULL THEN MorningTimeOut ELSE CAST(@MorningTimeOut AS TIME(7)) END,
             AfternoonTimeIn = CASE WHEN @AfternoonTimeIn IS NULL THEN AfternoonTimeIn ELSE CAST(@AfternoonTimeIn AS TIME(7)) END,
             AfternoonTimeOut = CASE WHEN @AfternoonTimeOut IS NULL THEN AfternoonTimeOut ELSE CAST(@AfternoonTimeOut AS TIME(7)) END,
+            Remarks = CASE WHEN @Remarks IS NULL THEN Remarks ELSE @Remarks END,
             Status = CASE WHEN @Status IS NULL THEN Status ELSE @Status END
           WHERE EmployeeID=@EmployeeID AND AttendanceDate=@AttendanceDate;
         END
         ELSE
         BEGIN
           INSERT INTO dbo.AttendanceRecords(
-            EmployeeID, AttendanceDate, MorningTimeIn, MorningTimeOut, AfternoonTimeIn, AfternoonTimeOut, Status
+            EmployeeID, AttendanceDate, MorningTimeIn, MorningTimeOut, AfternoonTimeIn, AfternoonTimeOut, Remarks, Status
           ) VALUES (
             @EmployeeID,
             @AttendanceDate,
@@ -3286,6 +3471,7 @@ async function updateAttendanceRecord(pool, id, body = {}) {
             CAST(@MorningTimeOut AS TIME(7)),
             CAST(@AfternoonTimeIn AS TIME(7)),
             CAST(@AfternoonTimeOut AS TIME(7)),
+            @Remarks,
             @Status
           );
         END;
@@ -3298,14 +3484,19 @@ async function updateAttendanceRecord(pool, id, body = {}) {
     return result.recordset[0] || null
   }
 
+  let targetAttendanceID = id
+
   try {
     const result = await req.query(updateSql)
     if (result.rowsAffected[0] === 0) {
       const upserted = await upsertByEmployeeDate()
-      if (upserted) return upserted
-      const err = new Error('Attendance record not found')
-      err.statusCode = 404
-      throw err
+      if (upserted) {
+        targetAttendanceID = upserted.AttendanceID
+      } else {
+        const err = new Error('Attendance record not found')
+        err.statusCode = 404
+        throw err
+      }
     }
   } catch (err) {
     if (err.number === 2627) {
@@ -3315,17 +3506,21 @@ async function updateAttendanceRecord(pool, id, body = {}) {
     throw err
   }
 
-  const row = await pool.request()
-    .input('AttendanceID', sql.NVarChar(36), id)
-    .query('SELECT * FROM dbo.AttendanceRecords WHERE AttendanceID=@AttendanceID')
-
-  return row.recordset[0] || { AttendanceID: id }
+  const updatedRecord = await recalculateAttendanceRecord(pool, { attendanceID: targetAttendanceID })
+  return updatedRecord || { AttendanceID: targetAttendanceID }
 }
 
 app.put('/attendance/:id', async (req, res) => {
   try {
     const pool = await getPool()
     const updated = await updateAttendanceRecord(pool, req.params.id, req.body || {})
+    if (updated?.EmployeeID && updated?.AttendanceDate) {
+      await recomputeOfficialOvertimePunchesForEmployeeDate(
+        pool,
+        String(updated.EmployeeID),
+        formatDateOnly(updated.AttendanceDate)
+      )
+    }
     res.json(updated)
   } catch (err) {
     console.error(err)
@@ -3338,6 +3533,13 @@ app.post('/attendance/update', async (req, res) => {
   try {
     const pool = await getPool()
     const updated = await updateAttendanceRecord(pool, id, payload)
+    if (updated?.EmployeeID && updated?.AttendanceDate) {
+      await recomputeOfficialOvertimePunchesForEmployeeDate(
+        pool,
+        String(updated.EmployeeID),
+        formatDateOnly(updated.AttendanceDate)
+      )
+    }
     res.json(updated)
   } catch (err) {
     console.error(err)
@@ -4288,11 +4490,20 @@ app.post('/devices/export-logs', async (req, res) => {
 })
 
 app.post('/devices/import-attendance-csv', async (req, res) => {
-  const { DeviceCode, CsvText, CreateMissingEmployees, OverwriteExisting } = req.body || {}
+  const {
+    DeviceCode,
+    CsvText,
+    CreateMissingEmployees,
+    OverwriteExisting,
+    UpdateEmployeeProfiles,
+    OverwriteEmployeeProfiles
+  } = req.body || {}
   const normalizedCode = String(DeviceCode || '').trim()
   const csvText = typeof CsvText === 'string' ? CsvText : ''
   const createMissingEmployees = CreateMissingEmployees === true
   const overwriteExisting = OverwriteExisting === true
+  const updateEmployeeProfiles = UpdateEmployeeProfiles === true
+  const overwriteEmployeeProfiles = OverwriteEmployeeProfiles === true
 
   if (!normalizedCode) return res.status(400).json({ error: 'DeviceCode is required' })
   if (!csvText || csvText.length < 5) return res.status(400).json({ error: 'CsvText is required' })
@@ -4373,13 +4584,17 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
       if (!k) return
       if (!employeeByIdentifier.has(k)) employeeByIdentifier.set(k, employee)
     }
+    const registerEmployeeIdentifiers = (employee) => {
+      if (!employee) return
+      addKey(employee.EmployeeCode, employee)
+      addKey(normalizeNumericCode(employee.EmployeeCode), employee)
+      addKey(employee.BiometricStaffCode, employee)
+      addKey(normalizeNumericCode(employee.BiometricStaffCode), employee)
+      addKey(employee.BiometricUserID, employee)
+      addKey(normalizeNumericCode(employee.BiometricUserID), employee)
+    }
     for (const e of empRes.recordset || []) {
-      addKey(e.EmployeeCode, e)
-      addKey(normalizeNumericCode(e.EmployeeCode), e)
-      addKey(e.BiometricStaffCode, e)
-      addKey(normalizeNumericCode(e.BiometricStaffCode), e)
-      addKey(e.BiometricUserID, e)
-      addKey(normalizeNumericCode(e.BiometricUserID), e)
+      registerEmployeeIdentifiers(e)
     }
 
     transaction = new sql.Transaction(pool)
@@ -4389,6 +4604,7 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
     let duplicateEvents = 0
     let unknownEmployees = 0
     let createdEmployees = 0
+    const employeeProfilesTouched = new Set()
 
     const resolveEmployee = async (p) => {
       const variants = []
@@ -4430,12 +4646,7 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
         const e = inserted.recordset[0] || null
         if (e) {
           createdEmployees++
-          addKey(e.EmployeeCode, e)
-          addKey(normalizeNumericCode(e.EmployeeCode), e)
-          addKey(e.BiometricStaffCode, e)
-          addKey(normalizeNumericCode(e.BiometricStaffCode), e)
-          addKey(e.BiometricUserID, e)
-          addKey(normalizeNumericCode(e.BiometricUserID), e)
+          registerEmployeeIdentifiers(e)
           return e
         }
       } catch (err) {
@@ -4452,30 +4663,77 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
       return null
     }
 
+    const syncEmployeeProfileFromImport = async (employeeID, employee, p) => {
+      if (!employeeID) return employee
+
+      const incomingName = String(p?.rawName || '').trim()
+      const { firstName, lastName } = splitName(incomingName)
+      const nextFirstName = String(firstName || '').trim() || null
+      const nextLastName = String(lastName || '').trim() || null
+      const nextDepartment = String(p?.department || '').trim() || null
+      const nextStaffCode = String(p?.staffCodeRaw || '').trim() || null
+      const nextUserId = String(p?.userIdRaw || '').trim() || null
+
+      const updReq = new sql.Request(transaction)
+      updReq.input('EmployeeID', sql.NVarChar(36), employeeID)
+      updReq.input('StaffCode', sql.NVarChar(50), nextStaffCode)
+      updReq.input('UserID', sql.NVarChar(50), nextUserId)
+      updReq.input('Department', sql.NVarChar(100), nextDepartment)
+      updReq.input('FirstName', sql.NVarChar(100), nextFirstName)
+      updReq.input('LastName', sql.NVarChar(100), nextLastName)
+      updReq.input('OverwriteEmployeeProfiles', sql.Bit, overwriteEmployeeProfiles ? 1 : 0)
+
+      const result = await updReq.query(`
+        UPDATE dbo.Employees
+        SET
+          BiometricStaffCode = CASE
+            WHEN (BiometricStaffCode IS NULL OR LTRIM(RTRIM(BiometricStaffCode))='') AND @StaffCode IS NOT NULL THEN @StaffCode
+            ELSE BiometricStaffCode
+          END,
+          BiometricUserID = CASE
+            WHEN (BiometricUserID IS NULL OR LTRIM(RTRIM(BiometricUserID))='') AND @UserID IS NOT NULL THEN @UserID
+            ELSE BiometricUserID
+          END,
+          Department = CASE
+            WHEN @OverwriteEmployeeProfiles=1 AND @Department IS NOT NULL THEN @Department
+            WHEN @OverwriteEmployeeProfiles=0 AND (Department IS NULL OR LTRIM(RTRIM(Department))='') AND @Department IS NOT NULL THEN @Department
+            ELSE Department
+          END,
+          FirstName = CASE
+            WHEN @OverwriteEmployeeProfiles=1 AND @FirstName IS NOT NULL THEN @FirstName
+            WHEN @OverwriteEmployeeProfiles=0 AND (FirstName IS NULL OR LTRIM(RTRIM(FirstName))='') AND @FirstName IS NOT NULL THEN @FirstName
+            ELSE FirstName
+          END,
+          LastName = CASE
+            WHEN @OverwriteEmployeeProfiles=1 AND @LastName IS NOT NULL THEN @LastName
+            WHEN @OverwriteEmployeeProfiles=0 AND (LastName IS NULL OR LTRIM(RTRIM(LastName))='') AND @LastName IS NOT NULL THEN @LastName
+            ELSE LastName
+          END
+        OUTPUT INSERTED.EmployeeID, INSERTED.EmployeeCode, INSERTED.BiometricStaffCode, INSERTED.BiometricUserID, INSERTED.FirstName, INSERTED.LastName, INSERTED.Department
+        WHERE EmployeeID=@EmployeeID
+      `)
+
+      const updated = result.recordset?.[0] || employee || null
+      if (updated) {
+        registerEmployeeIdentifiers(updated)
+        employeeProfilesTouched.add(String(updated.EmployeeID))
+      }
+      return updated
+    }
+
     const timesByEmployeeDate = new Map()
 
     for (const p of parsed) {
-      const employee = await resolveEmployee(p)
+      let employee = await resolveEmployee(p)
       let employeeID = employee?.EmployeeID || null
       if (!employeeID) unknownEmployees++
 
       const staffCodeToStore = String(p.staffCodeRaw).trim()
       const userIdToStore = p.userIdRaw ? String(p.userIdRaw).trim() : null
 
-      if (employeeID && (staffCodeToStore || userIdToStore)) {
-        const updReq = new sql.Request(transaction)
-        updReq.input('EmployeeID', sql.NVarChar(36), employeeID)
-        updReq.input('StaffCode', sql.NVarChar(50), staffCodeToStore || null)
-        updReq.input('UserID', sql.NVarChar(50), userIdToStore || null)
-        updReq.input('Department', sql.NVarChar(100), p.department || null)
-        await updReq.query(`
-          UPDATE dbo.Employees
-          SET
-            BiometricStaffCode = CASE WHEN (BiometricStaffCode IS NULL OR LTRIM(RTRIM(BiometricStaffCode))='') AND @StaffCode IS NOT NULL THEN @StaffCode ELSE BiometricStaffCode END,
-            BiometricUserID = CASE WHEN (BiometricUserID IS NULL OR LTRIM(RTRIM(BiometricUserID))='') AND @UserID IS NOT NULL THEN @UserID ELSE BiometricUserID END,
-            Department = CASE WHEN (Department IS NULL OR LTRIM(RTRIM(Department))='') AND @Department IS NOT NULL THEN @Department ELSE Department END
-          WHERE EmployeeID=@EmployeeID
-        `)
+      if (employeeID && (staffCodeToStore || userIdToStore || updateEmployeeProfiles)) {
+        employee = await syncEmployeeProfileFromImport(employeeID, employee, p)
+        employeeID = employee?.EmployeeID || employeeID
       }
 
       const insertEventReq = new sql.Request(transaction)
@@ -4584,13 +4842,26 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
         insertedEvents,
         duplicateEvents,
         createdEmployees,
+        employeeProfilesTouched: employeeProfilesTouched.size,
         unknownEmployees,
         attendanceGroupsTouched,
-        overwriteExisting
+        overwriteExisting,
+        updateEmployeeProfiles,
+        overwriteEmployeeProfiles
       }),
       deviceID: device.DeviceID,
       ipAddress: req.ip
     })
+
+    for (const key of timesByEmployeeDate.keys()) {
+      const [employeeID, dateIso] = key.split('|')
+      if (!employeeID || !dateIso) continue
+      try {
+        await recomputeOfficialOvertimePunchesForEmployeeDate(pool, employeeID, dateIso)
+      } catch (recomputeErr) {
+        console.error(`Failed to recompute official OT punches for ${employeeID} on ${dateIso}`, recomputeErr)
+      }
+    }
 
     return res.json({
       success: true,
@@ -4600,9 +4871,12 @@ app.post('/devices/import-attendance-csv', async (req, res) => {
       insertedEvents,
       duplicateEvents,
       createdEmployees,
+      employeeProfilesTouched: employeeProfilesTouched.size,
       unknownEmployees,
       attendanceGroupsTouched,
-      overwriteExisting
+      overwriteExisting,
+      updateEmployeeProfiles,
+      overwriteEmployeeProfiles
     })
   } catch (err) {
     try {
@@ -4959,6 +5233,352 @@ function resolveApprovedMinutes({
   return computed
 }
 
+function validateOptionalTimeWindow(startTime, endTime, startLabel, endLabel) {
+  if ((startTime && !endTime) || (!startTime && endTime)) {
+    throw new Error(`${startLabel} and ${endLabel} must both be provided`)
+  }
+
+  if (startTime && endTime && computeMinutesBetweenTimes(startTime, endTime) == null) {
+    throw new Error(`${endLabel} must be later than ${startLabel}`)
+  }
+}
+
+function isNonWorkingOvertimeDayType(value) {
+  const normalized = normalizeSpecialDayType(value)
+  return normalized === 'HOLIDAY' || normalized === 'REST_DAY' || normalized === 'SPECIAL_NON_WORKING'
+}
+
+function isWeekendIsoDate(value) {
+  const raw = String(value || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false
+  const date = new Date(`${raw}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return false
+  const day = date.getDay()
+  return day === 0 || day === 6
+}
+
+function isRegularWorkingDayOvertimeDate(dateText, specialDayType) {
+  return !isNonWorkingOvertimeDayType(specialDayType) && !isWeekendIsoDate(dateText)
+}
+
+function minutesToTimeLiteral(value) {
+  if (!Number.isFinite(value)) return null
+  const safe = Math.max(0, Math.round(value))
+  const hh = Math.floor(safe / 60)
+  const mm = safe % 60
+  if (hh < 0 || hh > 23) return null
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+}
+
+function toMinuteInterval(startTime, endTime) {
+  const start = timeLiteralToMinutes(startTime)
+  const end = timeLiteralToMinutes(endTime)
+  if (start == null || end == null || end <= start) return null
+  return { start, end }
+}
+
+function intersectMinuteIntervals(a, b) {
+  if (!a || !b) return null
+  const start = Math.max(a.start, b.start)
+  const end = Math.min(a.end, b.end)
+  if (end <= start) return null
+  return { start, end }
+}
+
+function subtractMinuteInterval(base, blocker) {
+  if (!base) return []
+  if (!blocker) return [base]
+
+  const overlap = intersectMinuteIntervals(base, blocker)
+  if (!overlap) return [base]
+
+  const next = []
+  if (base.start < overlap.start) next.push({ start: base.start, end: overlap.start })
+  if (overlap.end < base.end) next.push({ start: overlap.end, end: base.end })
+  return next
+}
+
+function subtractMinuteIntervalsBatch(baseIntervals, blockers) {
+  let remaining = Array.isArray(baseIntervals) ? [...baseIntervals] : []
+  for (const blocker of Array.isArray(blockers) ? blockers : []) {
+    remaining = remaining.flatMap((interval) => subtractMinuteInterval(interval, blocker))
+  }
+  return remaining
+}
+
+function trimMinuteIntervalsFrom(intervals, minimumStartMinute) {
+  return (Array.isArray(intervals) ? intervals : [])
+    .map((interval) => {
+      const start = Math.max(interval.start, minimumStartMinute)
+      if (interval.end <= start) return null
+      return { start, end: interval.end }
+    })
+    .filter(Boolean)
+}
+
+function filterMinuteIntervalsByWindow(intervals, windowInterval) {
+  if (!windowInterval) return Array.isArray(intervals) ? [...intervals] : []
+  return (Array.isArray(intervals) ? intervals : [])
+    .map((interval) => intersectMinuteIntervals(interval, windowInterval))
+    .filter(Boolean)
+}
+
+function allocateMinutesFromIntervals(intervals, approvedMinutes) {
+  let remainingMinutes = Number.isFinite(approvedMinutes) ? approvedMinutes : 0
+  const allocated = []
+
+  for (const interval of Array.isArray(intervals) ? intervals : []) {
+    if (remainingMinutes <= 0) break
+
+    const intervalMinutes = Math.max(0, interval.end - interval.start)
+    const usedMinutes = Math.min(intervalMinutes, remainingMinutes)
+    if (usedMinutes <= 0) continue
+
+    allocated.push({
+      start: interval.start,
+      end: interval.start + usedMinutes
+    })
+    remainingMinutes -= usedMinutes
+  }
+
+  return allocated
+}
+
+function pairEventTimesToIntervals(times) {
+  const sortedMinutes = Array.from(new Set(
+    (Array.isArray(times) ? times : [])
+      .map((time) => timeLiteralToMinutes(time))
+      .filter((value) => value != null)
+  )).sort((a, b) => a - b)
+
+  const intervals = []
+  for (let index = 0; index + 1 < sortedMinutes.length; index += 2) {
+    const start = sortedMinutes[index]
+    const end = sortedMinutes[index + 1]
+    if (end > start) intervals.push({ start, end })
+  }
+  return intervals
+}
+
+function getApprovedMinutesForOvertimeEntry(entry) {
+  const directMinutes = Number(entry?.ApprovedMinutes)
+  if (Number.isFinite(directMinutes) && directMinutes > 0) return Math.round(directMinutes)
+  return computeMinutesBetweenTimes(entry?.StartTime, entry?.EndTime)
+}
+
+function sortOvertimeEntriesForAllocation(entries) {
+  return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
+    const aStart = timeLiteralToMinutes(a?.StartTime)
+    const bStart = timeLiteralToMinutes(b?.StartTime)
+    if (aStart == null && bStart != null) return 1
+    if (aStart != null && bStart == null) return -1
+    if (aStart != null && bStart != null && aStart !== bStart) return aStart - bStart
+
+    const aCreated = new Date(a?.CreatedAt || 0).getTime()
+    const bCreated = new Date(b?.CreatedAt || 0).getTime()
+    if (aCreated !== bCreated) return aCreated - bCreated
+
+    return String(a?.OvertimeEntryID || '').localeCompare(String(b?.OvertimeEntryID || ''))
+  })
+}
+
+async function fetchOvertimeComputationContext(pool, employeeId, overtimeDate) {
+  const result = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeId)
+    .input('WorkDate', sql.Date, overtimeDate)
+    .query(`
+      SET DATEFIRST 1;
+
+      SELECT TOP 1
+        CONVERT(varchar(5),
+          CASE WHEN UPPER(ISNULL(sp.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sched.ReqMorningIn END,
+        108) AS RequiredMorningIn,
+        CONVERT(varchar(5),
+          CASE WHEN UPPER(ISNULL(sp.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sched.ReqMorningOut END,
+        108) AS RequiredMorningOut,
+        CONVERT(varchar(5),
+          CASE WHEN UPPER(ISNULL(sp.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sched.ReqAfternoonIn END,
+        108) AS RequiredAfternoonIn,
+        CONVERT(varchar(5),
+          CASE WHEN UPPER(ISNULL(sp.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sched.ReqAfternoonOut END,
+        108) AS RequiredAfternoonOut,
+        sp.DayType AS SpecialDayType
+      FROM dbo.Employees e
+      OUTER APPLY (
+        SELECT TOP 1
+          ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
+          ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
+          ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
+          ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut
+        FROM dbo.EmployeeShiftAllotments sa
+        JOIN dbo.ShiftDefinitions s
+          ON sa.ShiftID = s.ShiftID
+        LEFT JOIN dbo.ShiftDays shiftDay
+          ON shiftDay.ShiftID = s.ShiftID
+         AND shiftDay.DayOfWeek = CASE WHEN DATEPART(WEEKDAY, @WorkDate) = 1 THEN 7 ELSE DATEPART(WEEKDAY, @WorkDate) - 1 END
+        LEFT JOIN dbo.ShiftDaySchedules dss
+          ON dss.ShiftID = s.ShiftID
+         AND dss.DayOfWeek = ISNULL(shiftDay.DayOfWeek, CASE WHEN DATEPART(WEEKDAY, @WorkDate) = 1 THEN 7 ELSE DATEPART(WEEKDAY, @WorkDate) - 1 END)
+        WHERE sa.EmployeeID = e.EmployeeID
+          AND @WorkDate BETWEEN sa.EffectiveFrom AND ISNULL(sa.EffectiveTo, @WorkDate)
+        ORDER BY sa.EffectiveFrom DESC
+      ) sched
+      OUTER APPLY (
+        SELECT TOP 1 DayType
+        FROM dbo.SpecialDays
+        WHERE SpecialDate = @WorkDate
+        ORDER BY
+          CASE
+            WHEN UPPER(DayType) = 'HOLIDAY' THEN 1
+            WHEN UPPER(DayType) = 'SPECIAL_NON_WORKING' THEN 2
+            WHEN UPPER(DayType) = 'REST_DAY' THEN 3
+            WHEN UPPER(DayType) LIKE 'HALF_DAY%' THEN 4
+            ELSE 9
+          END,
+          CreatedAt DESC
+      ) sp
+      WHERE e.EmployeeID = @EmployeeID
+    `)
+
+  return result.recordset?.[0] || null
+}
+
+async function fetchOfficialOvertimeCandidateTimes(pool, employeeId, overtimeDate) {
+  const rawEventResult = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeId)
+    .input('WorkDate', sql.Date, overtimeDate)
+    .query(`
+      SELECT DISTINCT CONVERT(varchar(5), dae.EventTime, 108) AS EventTime
+      FROM dbo.DeviceAttendanceEvents dae
+      CROSS JOIN (
+        SELECT TOP 1 EmployeeCode, BiometricStaffCode, BiometricUserID
+        FROM dbo.Employees
+        WHERE EmployeeID = @EmployeeID
+      ) e
+      WHERE CAST(dae.EventTime AS DATE) = @WorkDate
+        AND (
+          dae.EmployeeID = @EmployeeID
+          OR (
+            dae.EmployeeID IS NULL
+            AND (
+              (e.BiometricStaffCode IS NOT NULL AND dae.StaffCode = e.BiometricStaffCode)
+              OR (e.BiometricUserID IS NOT NULL AND dae.UserID = e.BiometricUserID)
+              OR dae.StaffCode = e.EmployeeCode
+            )
+          )
+        )
+      ORDER BY EventTime ASC
+    `)
+
+  const rawTimes = (rawEventResult.recordset || [])
+    .map((row) => String(row?.EventTime || '').trim())
+    .filter(Boolean)
+
+  if (rawTimes.length) return rawTimes
+
+  const attendanceResult = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeId)
+    .input('WorkDate', sql.Date, overtimeDate)
+    .query(`
+      SELECT TOP 1
+        CONVERT(varchar(5), MorningTimeIn, 108) AS MorningTimeIn,
+        CONVERT(varchar(5), MorningTimeOut, 108) AS MorningTimeOut,
+        CONVERT(varchar(5), AfternoonTimeIn, 108) AS AfternoonTimeIn,
+        CONVERT(varchar(5), AfternoonTimeOut, 108) AS AfternoonTimeOut
+      FROM dbo.AttendanceRecords
+      WHERE EmployeeID = @EmployeeID
+        AND AttendanceDate = @WorkDate
+    `)
+
+  const row = attendanceResult.recordset?.[0] || null
+  return [
+    row?.MorningTimeIn,
+    row?.MorningTimeOut,
+    row?.AfternoonTimeIn,
+    row?.AfternoonTimeOut
+  ].filter(Boolean)
+}
+
+function buildActualOvertimeIntervalsForOfficialPunches(context, candidateTimes, overtimeDate) {
+  const actualIntervals = pairEventTimesToIntervals(candidateTimes)
+  if (!actualIntervals.length) return []
+
+  const useRegularWorkingDayRule = isRegularWorkingDayOvertimeDate(overtimeDate, context?.SpecialDayType)
+
+  const scheduleIntervals = !useRegularWorkingDayRule
+    ? []
+    : [
+        toMinuteInterval(context?.RequiredMorningIn, context?.RequiredMorningOut),
+        toMinuteInterval(context?.RequiredAfternoonIn, context?.RequiredAfternoonOut)
+      ].filter(Boolean)
+
+  let overtimeIntervals = actualIntervals.flatMap((actualInterval) => {
+    let pieces = [actualInterval]
+    for (const scheduleInterval of scheduleIntervals) {
+      pieces = pieces.flatMap((piece) => subtractMinuteInterval(piece, scheduleInterval))
+    }
+    return pieces
+  })
+
+  if (useRegularWorkingDayRule) {
+    overtimeIntervals = trimMinuteIntervalsFrom(overtimeIntervals, 18 * 60)
+  }
+
+  return overtimeIntervals
+}
+
+async function recomputeOfficialOvertimePunchesForEmployeeDate(pool, employeeId, overtimeDate) {
+  const entriesResult = await pool.request()
+    .input('EmployeeID', sql.NVarChar(36), employeeId)
+    .input('OvertimeDate', sql.Date, overtimeDate)
+    .query(`
+      SELECT
+        OvertimeEntryID,
+        CONVERT(varchar(5), StartTime, 108) AS StartTime,
+        CONVERT(varchar(5), EndTime, 108) AS EndTime,
+        ApprovedMinutes,
+        CreatedAt
+      FROM dbo.AdminOvertimeEntries
+      WHERE EmployeeID = @EmployeeID
+        AND OvertimeDate = @OvertimeDate
+    `)
+
+  const entries = sortOvertimeEntriesForAllocation(entriesResult.recordset || [])
+  if (!entries.length) return
+
+  const context = await fetchOvertimeComputationContext(pool, employeeId, overtimeDate)
+  const candidateTimes = await fetchOfficialOvertimeCandidateTimes(pool, employeeId, overtimeDate)
+  let availableIntervals = buildActualOvertimeIntervalsForOfficialPunches(context, candidateTimes, overtimeDate)
+
+  for (const entry of entries) {
+    const approvedMinutes = getApprovedMinutesForOvertimeEntry(entry)
+    let allocated = []
+
+    if (approvedMinutes && approvedMinutes > 0 && availableIntervals.length) {
+      const windowInterval = toMinuteInterval(entry.StartTime, entry.EndTime)
+      const eligibleIntervals = filterMinuteIntervalsByWindow(availableIntervals, windowInterval)
+      allocated = allocateMinutesFromIntervals(eligibleIntervals, approvedMinutes)
+      if (allocated.length) {
+        availableIntervals = subtractMinuteIntervalsBatch(availableIntervals, allocated)
+      }
+    }
+
+    const officialPunchInTime = allocated.length ? minutesToTimeLiteral(allocated[0].start) : null
+    const officialPunchOutTime = allocated.length ? minutesToTimeLiteral(allocated[allocated.length - 1].end) : null
+
+    await pool.request()
+      .input('OvertimeEntryID', sql.NVarChar(36), entry.OvertimeEntryID)
+      .input('OfficialPunchInTime', sql.NVarChar(8), officialPunchInTime)
+      .input('OfficialPunchOutTime', sql.NVarChar(8), officialPunchOutTime)
+      .query(`
+        UPDATE dbo.AdminOvertimeEntries
+        SET OfficialPunchInTime = CAST(@OfficialPunchInTime AS TIME(7)),
+            OfficialPunchOutTime = CAST(@OfficialPunchOutTime AS TIME(7))
+        WHERE OvertimeEntryID = @OvertimeEntryID
+      `)
+  }
+}
+
 async function ensureEmployeeExists(pool, employeeId) {
   const result = await pool.request()
     .input('EmployeeID', sql.NVarChar(36), employeeId)
@@ -4977,6 +5597,10 @@ const overtimeEntrySelectSql = `
     CONVERT(varchar(10), ot.OvertimeDate, 23) AS OvertimeDate,
     CONVERT(varchar(5), ot.StartTime, 108) AS StartTime,
     CONVERT(varchar(5), ot.EndTime, 108) AS EndTime,
+    CONVERT(varchar(5), ot.OTPunchInTime, 108) AS OTPunchInTime,
+    CONVERT(varchar(5), ot.OTPunchOutTime, 108) AS OTPunchOutTime,
+    CONVERT(varchar(5), ot.OfficialPunchInTime, 108) AS OfficialPunchInTime,
+    CONVERT(varchar(5), ot.OfficialPunchOutTime, 108) AS OfficialPunchOutTime,
     ot.ApprovedMinutes,
     CAST(CAST(ISNULL(ot.ApprovedMinutes, 0) AS DECIMAL(10, 2)) / 60.0 AS DECIMAL(10, 2)) AS ApprovedHours,
     ot.OvertimeType,
@@ -5244,6 +5868,15 @@ app.post('/overtime-entries', requireAdmin, async (req, res) => {
 
     const startTime = parseOptionalTimeValue(req.body?.StartTime ?? req.body?.startTime, 'StartTime')
     const endTime = parseOptionalTimeValue(req.body?.EndTime ?? req.body?.endTime, 'EndTime')
+    const otPunchInTime = parseOptionalTimeValue(
+      req.body?.OTPunchInTime ?? req.body?.otPunchInTime,
+      'OTPunchInTime'
+    )
+    const otPunchOutTime = parseOptionalTimeValue(
+      req.body?.OTPunchOutTime ?? req.body?.otPunchOutTime,
+      'OTPunchOutTime'
+    )
+    validateOptionalTimeWindow(otPunchInTime, otPunchOutTime, 'OTPunchInTime', 'OTPunchOutTime')
     const approvedMinutes = resolveApprovedMinutes({
       approvedMinutes: req.body?.ApprovedMinutes ?? req.body?.approvedMinutes,
       approvedHours: req.body?.ApprovedHours ?? req.body?.approvedHours,
@@ -5264,16 +5897,20 @@ app.post('/overtime-entries', requireAdmin, async (req, res) => {
       .input('OvertimeDate', sql.Date, overtimeDate)
       .input('StartTime', sql.NVarChar(8), startTime)
       .input('EndTime', sql.NVarChar(8), endTime)
+      .input('OTPunchInTime', sql.NVarChar(8), otPunchInTime)
+      .input('OTPunchOutTime', sql.NVarChar(8), otPunchOutTime)
       .input('ApprovedMinutes', sql.Int, approvedMinutes)
       .input('OvertimeType', sql.NVarChar(50), overtimeType)
       .input('Reason', sql.NVarChar(255), reason ? String(reason).trim() : null)
       .input('CreatedByUserID', sql.NVarChar(36), String(req.authUser?.sub || '').trim() || null)
       .query(`
         INSERT INTO dbo.AdminOvertimeEntries
-        (OvertimeEntryID, EmployeeID, OvertimeDate, StartTime, EndTime, ApprovedMinutes, OvertimeType, Reason, Status, CreatedByUserID)
+        (OvertimeEntryID, EmployeeID, OvertimeDate, StartTime, EndTime, ApprovedMinutes, OTPunchInTime, OTPunchOutTime, OvertimeType, Reason, Status, CreatedByUserID)
         VALUES
-        (@OvertimeEntryID, @EmployeeID, @OvertimeDate, CAST(@StartTime AS TIME(7)), CAST(@EndTime AS TIME(7)), @ApprovedMinutes, @OvertimeType, @Reason, 'APPROVED', @CreatedByUserID)
+        (@OvertimeEntryID, @EmployeeID, @OvertimeDate, CAST(@StartTime AS TIME(7)), CAST(@EndTime AS TIME(7)), @ApprovedMinutes, CAST(@OTPunchInTime AS TIME(7)), CAST(@OTPunchOutTime AS TIME(7)), @OvertimeType, @Reason, 'APPROVED', @CreatedByUserID)
       `)
+
+    await recomputeOfficialOvertimePunchesForEmployeeDate(pool, employeeId, overtimeDate)
 
     const created = await fetchOvertimeEntryById(pool, entryId)
 
@@ -5319,6 +5956,15 @@ app.put('/overtime-entries/:id', requireAdmin, async (req, res) => {
       req.body?.EndTime ?? req.body?.endTime ?? before.EndTime,
       'EndTime'
     )
+    const otPunchInTime = parseOptionalTimeValue(
+      req.body?.OTPunchInTime ?? req.body?.otPunchInTime ?? before.OTPunchInTime,
+      'OTPunchInTime'
+    )
+    const otPunchOutTime = parseOptionalTimeValue(
+      req.body?.OTPunchOutTime ?? req.body?.otPunchOutTime ?? before.OTPunchOutTime,
+      'OTPunchOutTime'
+    )
+    validateOptionalTimeWindow(otPunchInTime, otPunchOutTime, 'OTPunchInTime', 'OTPunchOutTime')
     const approvedMinutes = resolveApprovedMinutes({
       approvedMinutes: req.body?.ApprovedMinutes ?? req.body?.approvedMinutes ?? before.ApprovedMinutes,
       approvedHours: req.body?.ApprovedHours ?? req.body?.approvedHours,
@@ -5336,6 +5982,8 @@ app.put('/overtime-entries/:id', requireAdmin, async (req, res) => {
       .input('OvertimeDate', sql.Date, overtimeDate)
       .input('StartTime', sql.NVarChar(8), startTime)
       .input('EndTime', sql.NVarChar(8), endTime)
+      .input('OTPunchInTime', sql.NVarChar(8), otPunchInTime)
+      .input('OTPunchOutTime', sql.NVarChar(8), otPunchOutTime)
       .input('ApprovedMinutes', sql.Int, approvedMinutes)
       .input('OvertimeType', sql.NVarChar(50), overtimeType)
       .input('Reason', sql.NVarChar(255), reason ? String(reason).trim() : null)
@@ -5346,6 +5994,8 @@ app.put('/overtime-entries/:id', requireAdmin, async (req, res) => {
             OvertimeDate=@OvertimeDate,
             StartTime=CAST(@StartTime AS TIME(7)),
             EndTime=CAST(@EndTime AS TIME(7)),
+            OTPunchInTime=CAST(@OTPunchInTime AS TIME(7)),
+            OTPunchOutTime=CAST(@OTPunchOutTime AS TIME(7)),
             ApprovedMinutes=@ApprovedMinutes,
             OvertimeType=@OvertimeType,
             Reason=@Reason,
@@ -5353,6 +6003,11 @@ app.put('/overtime-entries/:id', requireAdmin, async (req, res) => {
             UpdatedAt=GETDATE()
         WHERE OvertimeEntryID=@OvertimeEntryID
       `)
+
+    await recomputeOfficialOvertimePunchesForEmployeeDate(pool, employeeId, overtimeDate)
+    if (before.EmployeeID && before.OvertimeDate && (before.EmployeeID !== employeeId || before.OvertimeDate !== overtimeDate)) {
+      await recomputeOfficialOvertimePunchesForEmployeeDate(pool, before.EmployeeID, before.OvertimeDate)
+    }
 
     const updated = await fetchOvertimeEntryById(pool, entryId)
 
@@ -5383,6 +6038,10 @@ app.delete('/overtime-entries/:id', requireAdmin, async (req, res) => {
     await pool.request()
       .input('OvertimeEntryID', sql.NVarChar(36), entryId)
       .query('DELETE FROM dbo.AdminOvertimeEntries WHERE OvertimeEntryID=@OvertimeEntryID')
+
+    if (before.EmployeeID && before.OvertimeDate) {
+      await recomputeOfficialOvertimePunchesForEmployeeDate(pool, before.EmployeeID, before.OvertimeDate)
+    }
 
     await writeAuditLog(pool, {
       actor: resolveAuditActor(req, null),
@@ -5861,7 +6520,6 @@ app.get('/attendance/today', async (req, res) => {
               COALESCE(dss.MorningTimeOut, s.MorningTimeOut)  AS ReqMorningOut,
               COALESCE(dss.AfternoonTimeIn,  s.AfternoonTimeIn)   AS ReqAfternoonIn,
               COALESCE(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
-              COALESCE(dss.GracePeriodMinutes, s.GracePeriodMinutes, 0) AS GracePeriodMinutes,
               ROW_NUMBER() OVER (PARTITION BY e.EmployeeID ORDER BY sa.EffectiveFrom DESC) AS rn
           FROM dbo.EmployeeShiftAllotments sa
           JOIN dbo.ShiftDefinitions s
@@ -5885,6 +6543,9 @@ app.get('/attendance/today', async (req, res) => {
             CONVERT(varchar(5), a.MorningTimeOut, 108)   AS MorningTimeOut,
             CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
             CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+            ISNULL(a.MinutesLate, 0) AS MinutesLate,
+            ISNULL(a.MinutesEarlyLeave, 0) AS MinutesEarlyLeave,
+            ISNULL(a.Status, '') AS Status,
             sp.ShiftName,
             CONVERT(varchar(5),
               CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sp.ReqMorningIn END,
@@ -5898,7 +6559,6 @@ app.get('/attendance/today', async (req, res) => {
             CONVERT(varchar(5),
               CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sp.ReqAfternoonOut END,
             108) AS RequiredAfternoonOut,
-            sp.GracePeriodMinutes,
             sd.DayType AS SpecialDayType,
             sd.Description AS SpecialDayDescription,
             CASE
@@ -5923,25 +6583,30 @@ app.get('/attendance/today', async (req, res) => {
               WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) LIKE 'HALF_DAY%'
                 THEN 'Half-Day'
               WHEN a.AttendanceID IS NULL THEN 'Absent'
-              WHEN
-                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
-                OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
-              WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
-              WHEN a.AfternoonTimeIn IS NOT NULL
-                   AND sp.ReqAfternoonIn IS NOT NULL
-                   AND a.AfternoonTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqAfternoonIn) THEN 'Late'
-              WHEN a.MorningTimeOut IS NOT NULL
-                   AND sp.ReqMorningOut IS NOT NULL
-                   AND a.MorningTimeOut < sp.ReqMorningOut THEN 'Early Leave'
-              WHEN a.AfternoonTimeOut IS NOT NULL
-                   AND sp.ReqAfternoonOut IS NOT NULL
-                   AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
-              WHEN
-                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
-              ELSE 'On-Time'
+              ELSE COALESCE(NULLIF(a.Status, ''), CASE
+                WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
+                WHEN
+                  (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+                  OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
+                  OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
+                  OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
+                WHEN a.MorningTimeIn IS NOT NULL
+                     AND sp.ReqMorningIn IS NOT NULL
+                     AND a.MorningTimeIn > sp.ReqMorningIn THEN 'Late'
+                WHEN a.AfternoonTimeIn IS NOT NULL
+                     AND sp.ReqAfternoonIn IS NOT NULL
+                     AND a.AfternoonTimeIn > sp.ReqAfternoonIn THEN 'Late'
+                WHEN a.MorningTimeOut IS NOT NULL
+                     AND sp.ReqMorningOut IS NOT NULL
+                     AND a.MorningTimeOut < sp.ReqMorningOut THEN 'Early Leave'
+                WHEN a.AfternoonTimeOut IS NOT NULL
+                     AND sp.ReqAfternoonOut IS NOT NULL
+                     AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
+                WHEN
+                  (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+                  OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
+                ELSE 'On-Time'
+              END)
             END AS AttendanceSummary
         FROM ShiftPick sp
         LEFT JOIN dbo.AttendanceRecords a
@@ -6008,7 +6673,6 @@ app.post('/attendance/range', async (req, res) => {
               COALESCE(dss.MorningTimeOut, s.MorningTimeOut)  AS ReqMorningOut,
               COALESCE(dss.AfternoonTimeIn,  s.AfternoonTimeIn)   AS ReqAfternoonIn,
               COALESCE(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
-              COALESCE(dss.GracePeriodMinutes, s.GracePeriodMinutes, 0) AS GracePeriodMinutes,
               ROW_NUMBER() OVER (PARTITION BY d.dt, e.EmployeeID ORDER BY sa.EffectiveFrom DESC) AS rn
           FROM Dates d
           JOIN dbo.EmployeeShiftAllotments sa
@@ -6034,6 +6698,10 @@ app.post('/attendance/range', async (req, res) => {
             CONVERT(varchar(5), a.MorningTimeOut, 108)   AS MorningTimeOut,
             CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
             CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+            ISNULL(a.MinutesLate, 0) AS MinutesLate,
+            ISNULL(a.MinutesEarlyLeave, 0) AS MinutesEarlyLeave,
+            ISNULL(a.Status, '') AS Status,
+            a.Remarks,
             sp.ShiftName,
             CONVERT(varchar(5),
               CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_PM','HALF_DAY_P.M.','HALF_DAY_PM_ONLY') THEN NULL ELSE sp.ReqMorningIn END,
@@ -6047,7 +6715,6 @@ app.post('/attendance/range', async (req, res) => {
             CONVERT(varchar(5),
               CASE WHEN UPPER(ISNULL(sd.DayType,'')) IN ('HALF_DAY_AM','HALF_DAY_A.M.','HALF_DAY_AM_ONLY') THEN NULL ELSE sp.ReqAfternoonOut END,
             108) AS RequiredAfternoonOut,
-            sp.GracePeriodMinutes,
             sd.DayType AS SpecialDayType,
             sd.Description AS SpecialDayDescription,
             CASE
@@ -6072,25 +6739,30 @@ app.post('/attendance/range', async (req, res) => {
               WHEN sd.DayType IS NOT NULL AND UPPER(sd.DayType) LIKE 'HALF_DAY%'
                 THEN 'Half-Day'
               WHEN a.AttendanceID IS NULL THEN 'Absent'
-              WHEN
-                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
-                OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
-              WHEN a.MorningTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqMorningIn) THEN 'Late'
-              WHEN a.AfternoonTimeIn IS NOT NULL
-                   AND sp.ReqAfternoonIn IS NOT NULL
-                   AND a.AfternoonTimeIn > DATEADD(MINUTE, sp.GracePeriodMinutes, sp.ReqAfternoonIn) THEN 'Late'
-              WHEN a.MorningTimeOut IS NOT NULL
-                   AND sp.ReqMorningOut IS NOT NULL
-                   AND a.MorningTimeOut < sp.ReqMorningOut THEN 'Early Leave'
-              WHEN a.AfternoonTimeOut IS NOT NULL
-                   AND sp.ReqAfternoonOut IS NOT NULL
-                   AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
-              WHEN
-                (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
-                OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
-              ELSE 'On-Time'
+              ELSE COALESCE(NULLIF(a.Status, ''), CASE
+                WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
+                WHEN
+                  (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
+                  OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
+                  OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
+                  OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
+                WHEN a.MorningTimeIn IS NOT NULL
+                     AND sp.ReqMorningIn IS NOT NULL
+                     AND a.MorningTimeIn > sp.ReqMorningIn THEN 'Late'
+                WHEN a.AfternoonTimeIn IS NOT NULL
+                     AND sp.ReqAfternoonIn IS NOT NULL
+                     AND a.AfternoonTimeIn > sp.ReqAfternoonIn THEN 'Late'
+                WHEN a.MorningTimeOut IS NOT NULL
+                     AND sp.ReqMorningOut IS NOT NULL
+                     AND a.MorningTimeOut < sp.ReqMorningOut THEN 'Early Leave'
+                WHEN a.AfternoonTimeOut IS NOT NULL
+                     AND sp.ReqAfternoonOut IS NOT NULL
+                     AND a.AfternoonTimeOut < sp.ReqAfternoonOut THEN 'Early Leave'
+                WHEN
+                  (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
+                  OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
+                ELSE 'On-Time'
+              END)
             END AS AttendanceSummary
         FROM ShiftPick sp
         LEFT JOIN dbo.AttendanceRecords a
@@ -6353,21 +7025,26 @@ app.post('/attendance/raw-range', async (req, res) => {
           CONVERT(varchar(5), a.MorningTimeOut, 108)   AS MorningTimeOut,
           CONVERT(varchar(5), a.AfternoonTimeIn, 108)  AS AfternoonTimeIn,
           CONVERT(varchar(5), a.AfternoonTimeOut, 108) AS AfternoonTimeOut,
+          ISNULL(a.MinutesLate, 0) AS MinutesLate,
+          ISNULL(a.MinutesEarlyLeave, 0) AS MinutesEarlyLeave,
+          ISNULL(a.Status, '') AS Status,
+          a.Remarks,
           sched.ShiftName,
-          ISNULL(sched.GracePeriodMinutes, 0) AS GracePeriodMinutes,
           CONVERT(varchar(5), sched.ReqMorningIn, 108)     AS RequiredMorningIn,
           CONVERT(varchar(5), sched.ReqMorningOut, 108)    AS RequiredMorningOut,
           CONVERT(varchar(5), sched.ReqAfternoonIn, 108)   AS RequiredAfternoonIn,
           CONVERT(varchar(5), sched.ReqAfternoonOut, 108)  AS RequiredAfternoonOut,
-          CASE
+          COALESCE(NULLIF(a.Status, ''), CASE
+            WHEN a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL THEN 'Absent'
             WHEN
               (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NULL)
               OR (a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NOT NULL)
               OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NULL)
               OR (a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NOT NULL) THEN 'Incomplete'
-            WHEN sched.ReqMorningIn IS NOT NULL AND a.MorningTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqMorningIn) THEN 'Late'
+            WHEN sched.ReqMorningIn IS NOT NULL AND a.MorningTimeIn IS NOT NULL
+                 AND a.MorningTimeIn > sched.ReqMorningIn THEN 'Late'
             WHEN sched.ReqAfternoonIn IS NOT NULL AND a.AfternoonTimeIn IS NOT NULL
-                 AND a.AfternoonTimeIn > DATEADD(MINUTE, ISNULL(sched.GracePeriodMinutes, 0), sched.ReqAfternoonIn) THEN 'Late'
+                 AND a.AfternoonTimeIn > sched.ReqAfternoonIn THEN 'Late'
             WHEN a.MorningTimeOut IS NOT NULL
                  AND sched.ReqMorningOut IS NOT NULL
                  AND a.MorningTimeOut < sched.ReqMorningOut THEN 'Early Leave'
@@ -6378,7 +7055,7 @@ app.post('/attendance/raw-range', async (req, res) => {
               (a.MorningTimeIn IS NOT NULL AND a.MorningTimeOut IS NOT NULL AND a.AfternoonTimeIn IS NULL AND a.AfternoonTimeOut IS NULL)
               OR (a.AfternoonTimeIn IS NOT NULL AND a.AfternoonTimeOut IS NOT NULL AND a.MorningTimeIn IS NULL AND a.MorningTimeOut IS NULL) THEN 'Half-Day'
             ELSE 'On-Time'
-          END AS AttendanceSummary
+          END) AS AttendanceSummary
         FROM dbo.AttendanceRecords a
         JOIN dbo.Employees e ON e.EmployeeID = a.EmployeeID
         OUTER APPLY (
@@ -6387,8 +7064,7 @@ app.post('/attendance/raw-range', async (req, res) => {
             ISNULL(dss.MorningTimeIn, s.MorningTimeIn) AS ReqMorningIn,
             ISNULL(dss.MorningTimeOut, s.MorningTimeOut) AS ReqMorningOut,
             ISNULL(dss.AfternoonTimeIn, s.AfternoonTimeIn) AS ReqAfternoonIn,
-            ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut,
-            ISNULL(dss.GracePeriodMinutes, s.GracePeriodMinutes) AS GracePeriodMinutes
+            ISNULL(dss.AfternoonTimeOut, s.AfternoonTimeOut) AS ReqAfternoonOut
           FROM dbo.EmployeeShiftAllotments sa
           JOIN dbo.ShiftDefinitions s ON sa.ShiftID = s.ShiftID
           LEFT JOIN dbo.ShiftDays sd
@@ -6721,6 +7397,315 @@ app.delete('/employees/:id', async (req, res) => {
       return res.status(400).json({ error: 'Cannot delete employee because related records still exist.' })
     }
     res.status(500).json({ error: 'Delete employee failed.' })
+  }
+})
+
+app.post('/employees/import-csv', async (req, res) => {
+  const {
+    CsvText,
+    CreateMissingEmployees,
+    OverwriteExisting,
+    DefaultPosition
+  } = req.body || {}
+
+  const csvText = typeof CsvText === 'string' ? CsvText : ''
+  const createMissingEmployees = CreateMissingEmployees !== false
+  const overwriteExisting = OverwriteExisting === true
+  const defaultPosition = String(DefaultPosition || 'Employee').trim() || 'Employee'
+
+  if (!csvText || csvText.length < 5) {
+    return res.status(400).json({ error: 'CsvText is required' })
+  }
+  if (csvText.length > 10_000_000) {
+    return res.status(413).json({ error: 'CSV payload too large (max 10MB).' })
+  }
+
+  let transaction = null
+  try {
+    const pool = await getPool()
+    const allRows = parseCsvRows(csvText)
+    if (allRows.length < 2) {
+      return res.status(400).json({ error: 'CSV contains no data rows.' })
+    }
+
+    const header = allRows[0].map(normalizeHeaderName)
+    const findIndex = (candidates) => {
+      for (const candidate of candidates) {
+        const index = header.indexOf(normalizeHeaderName(candidate))
+        if (index >= 0) return index
+      }
+      return -1
+    }
+
+    const staffIdx = findIndex(['staff code', 'staffcode', 'staff', 'biometric staff code', 'employee code', 'emp id', 'emp_id'])
+    const userIdx = findIndex(['user id', 'userid', 'user', 'biometric user id'])
+    const nameIdx = findIndex(['name', 'employee name', 'emp name', 'full name', 'employee'])
+    const deptIdx = findIndex(['department', 'dept'])
+    const positionIdx = findIndex(['position', 'employment status', 'role', 'designation'])
+    const emailIdx = findIndex(['email', 'email address'])
+    const phoneIdx = findIndex(['phone', 'contact number', 'mobile', 'cellphone'])
+
+    if (staffIdx < 0 && userIdx < 0 && nameIdx < 0) {
+      return res.status(400).json({
+        error: 'CSV header is missing employee identifiers. Include at least Staff Code, User ID, or Name.'
+      })
+    }
+
+    const mergedByKey = new Map()
+    for (let rowIndex = 1; rowIndex < allRows.length; rowIndex++) {
+      const line = allRows[rowIndex]
+      if (!line || !line.length) continue
+
+      const record = {
+        staffCodeRaw: staffIdx >= 0 ? String(line[staffIdx] ?? '').trim() : '',
+        staffCodeNormalized: staffIdx >= 0 ? normalizeNumericCode(line[staffIdx] ?? '') : '',
+        userIdRaw: userIdx >= 0 ? String(line[userIdx] ?? '').trim() : '',
+        rawName: nameIdx >= 0 ? String(line[nameIdx] ?? '').trim() : '',
+        department: deptIdx >= 0 ? String(line[deptIdx] ?? '').trim() : '',
+        position: positionIdx >= 0 ? String(line[positionIdx] ?? '').trim() : '',
+        email: emailIdx >= 0 ? String(line[emailIdx] ?? '').trim() : '',
+        phone: phoneIdx >= 0 ? String(line[phoneIdx] ?? '').trim() : ''
+      }
+
+      const uniqueKey =
+        record.staffCodeNormalized ||
+        normalizeNumericCode(record.userIdRaw) ||
+        String(record.rawName || '').trim().toLowerCase()
+
+      if (!uniqueKey) continue
+      mergedByKey.set(uniqueKey, mergeEmployeeImportRecord(mergedByKey.get(uniqueKey), record))
+    }
+
+    const parsed = Array.from(mergedByKey.values())
+    if (!parsed.length) {
+      return res.status(400).json({ error: 'No valid employee rows found in CSV.' })
+    }
+    if (parsed.length > 20_000) {
+      return res.status(413).json({ error: 'Too many unique employees in CSV (max 20,000).' })
+    }
+
+    const employeeResult = await pool.request().query(`
+      SELECT
+        EmployeeID,
+        EmployeeCode,
+        FirstName,
+        LastName,
+        Department,
+        EmploymentStatus,
+        BiometricStaffCode,
+        BiometricUserID,
+        ContactNumber,
+        Email
+      FROM dbo.Employees
+    `)
+
+    const employeeByIdentifier = new Map()
+    const registerEmployeeIdentifier = (key, employee) => {
+      const normalizedKey = String(key || '').trim()
+      if (!normalizedKey) return
+      if (!employeeByIdentifier.has(normalizedKey)) employeeByIdentifier.set(normalizedKey, employee)
+    }
+    const registerEmployee = (employee) => {
+      if (!employee) return
+      registerEmployeeIdentifier(employee.EmployeeCode, employee)
+      registerEmployeeIdentifier(normalizeNumericCode(employee.EmployeeCode), employee)
+      registerEmployeeIdentifier(employee.BiometricStaffCode, employee)
+      registerEmployeeIdentifier(normalizeNumericCode(employee.BiometricStaffCode), employee)
+      registerEmployeeIdentifier(employee.BiometricUserID, employee)
+      registerEmployeeIdentifier(normalizeNumericCode(employee.BiometricUserID), employee)
+    }
+    for (const employee of employeeResult.recordset || []) {
+      registerEmployee(employee)
+    }
+
+    const resolveEmployee = (record) => {
+      const candidates = [
+        record.staffCodeRaw,
+        record.staffCodeNormalized,
+        record.userIdRaw,
+        normalizeNumericCode(record.userIdRaw)
+      ]
+
+      for (const candidate of candidates) {
+        const key = String(candidate || '').trim()
+        if (!key) continue
+        if (employeeByIdentifier.has(key)) return employeeByIdentifier.get(key)
+      }
+      return null
+    }
+
+    transaction = new sql.Transaction(pool)
+    await transaction.begin()
+
+    let created = 0
+    let updated = 0
+    let unchanged = 0
+    let skipped = 0
+
+    for (const record of parsed) {
+      const existing = resolveEmployee(record)
+      const incomingName = String(record.rawName || '').trim()
+      const incomingDepartment = String(record.department || '').trim()
+      const incomingPosition = String(record.position || '').trim() || defaultPosition
+      const incomingEmail = String(record.email || '').trim()
+      const incomingPhone = String(record.phone || '').trim()
+      const incomingStaffCode = String(record.staffCodeRaw || '').trim() || null
+      const incomingUserId = String(record.userIdRaw || '').trim() || null
+      const { firstName, lastName } = splitName(incomingName)
+      const nextFirstName = String(firstName || '').trim() || null
+      const nextLastName = String(lastName || '').trim() || null
+
+      if (!existing) {
+        if (!createMissingEmployees) {
+          skipped++
+          continue
+        }
+
+        const employeeCode = incomingStaffCode || incomingUserId || `EMP${Date.now()}${Math.floor(Math.random() * 1000)}`
+        const insertReq = new sql.Request(transaction)
+        insertReq.input('EmployeeID', sql.NVarChar(36), require('crypto').randomUUID())
+        insertReq.input('EmployeeCode', sql.NVarChar(50), employeeCode)
+        insertReq.input('FirstName', sql.NVarChar(100), nextFirstName || 'Unknown')
+        insertReq.input('LastName', sql.NVarChar(100), nextLastName || employeeCode)
+        insertReq.input('Department', sql.NVarChar(100), incomingDepartment || null)
+        insertReq.input('EmploymentStatus', sql.NVarChar(50), incomingPosition)
+        insertReq.input('BiometricStaffCode', sql.NVarChar(50), incomingStaffCode)
+        insertReq.input('BiometricUserID', sql.NVarChar(50), incomingUserId)
+        insertReq.input('ContactNumber', sql.NVarChar(50), incomingPhone || null)
+        insertReq.input('Email', sql.NVarChar(150), incomingEmail || null)
+        insertReq.input('HireDate', sql.Date, new Date())
+
+        const inserted = await insertReq.query(`
+          INSERT INTO dbo.Employees
+            (EmployeeID, EmployeeCode, FirstName, LastName, Department, EmploymentStatus, BiometricStaffCode, BiometricUserID, ContactNumber, Email, HireDate)
+          OUTPUT INSERTED.EmployeeID, INSERTED.EmployeeCode, INSERTED.FirstName, INSERTED.LastName, INSERTED.Department, INSERTED.EmploymentStatus, INSERTED.BiometricStaffCode, INSERTED.BiometricUserID, INSERTED.ContactNumber, INSERTED.Email
+          VALUES
+            (@EmployeeID, @EmployeeCode, @FirstName, @LastName, @Department, @EmploymentStatus, @BiometricStaffCode, @BiometricUserID, @ContactNumber, @Email, @HireDate)
+        `)
+        const createdEmployee = inserted.recordset?.[0] || null
+        if (createdEmployee) {
+          created++
+          registerEmployee(createdEmployee)
+        }
+        continue
+      }
+
+      const updateReq = new sql.Request(transaction)
+      updateReq.input('EmployeeID', sql.NVarChar(36), existing.EmployeeID)
+      updateReq.input('BiometricStaffCode', sql.NVarChar(50), incomingStaffCode)
+      updateReq.input('BiometricUserID', sql.NVarChar(50), incomingUserId)
+      updateReq.input('Department', sql.NVarChar(100), incomingDepartment || null)
+      updateReq.input('EmploymentStatus', sql.NVarChar(50), incomingPosition || null)
+      updateReq.input('FirstName', sql.NVarChar(100), nextFirstName)
+      updateReq.input('LastName', sql.NVarChar(100), nextLastName)
+      updateReq.input('ContactNumber', sql.NVarChar(50), incomingPhone || null)
+      updateReq.input('Email', sql.NVarChar(150), incomingEmail || null)
+      updateReq.input('OverwriteExisting', sql.Bit, overwriteExisting ? 1 : 0)
+
+      const result = await updateReq.query(`
+        UPDATE dbo.Employees
+        SET
+          BiometricStaffCode = CASE
+            WHEN @OverwriteExisting=1 AND @BiometricStaffCode IS NOT NULL THEN @BiometricStaffCode
+            WHEN @OverwriteExisting=0 AND (BiometricStaffCode IS NULL OR LTRIM(RTRIM(BiometricStaffCode))='') AND @BiometricStaffCode IS NOT NULL THEN @BiometricStaffCode
+            ELSE BiometricStaffCode
+          END,
+          BiometricUserID = CASE
+            WHEN @OverwriteExisting=1 AND @BiometricUserID IS NOT NULL THEN @BiometricUserID
+            WHEN @OverwriteExisting=0 AND (BiometricUserID IS NULL OR LTRIM(RTRIM(BiometricUserID))='') AND @BiometricUserID IS NOT NULL THEN @BiometricUserID
+            ELSE BiometricUserID
+          END,
+          Department = CASE
+            WHEN @OverwriteExisting=1 AND @Department IS NOT NULL THEN @Department
+            WHEN @OverwriteExisting=0 AND (Department IS NULL OR LTRIM(RTRIM(Department))='') AND @Department IS NOT NULL THEN @Department
+            ELSE Department
+          END,
+          EmploymentStatus = CASE
+            WHEN @OverwriteExisting=1 AND @EmploymentStatus IS NOT NULL THEN @EmploymentStatus
+            WHEN @OverwriteExisting=0 AND (EmploymentStatus IS NULL OR LTRIM(RTRIM(EmploymentStatus))='') AND @EmploymentStatus IS NOT NULL THEN @EmploymentStatus
+            ELSE EmploymentStatus
+          END,
+          FirstName = CASE
+            WHEN @OverwriteExisting=1 AND @FirstName IS NOT NULL THEN @FirstName
+            WHEN @OverwriteExisting=0 AND (FirstName IS NULL OR LTRIM(RTRIM(FirstName))='') AND @FirstName IS NOT NULL THEN @FirstName
+            ELSE FirstName
+          END,
+          LastName = CASE
+            WHEN @OverwriteExisting=1 AND @LastName IS NOT NULL THEN @LastName
+            WHEN @OverwriteExisting=0 AND (LastName IS NULL OR LTRIM(RTRIM(LastName))='') AND @LastName IS NOT NULL THEN @LastName
+            ELSE LastName
+          END,
+          ContactNumber = CASE
+            WHEN @OverwriteExisting=1 AND @ContactNumber IS NOT NULL THEN @ContactNumber
+            WHEN @OverwriteExisting=0 AND (ContactNumber IS NULL OR LTRIM(RTRIM(ContactNumber))='') AND @ContactNumber IS NOT NULL THEN @ContactNumber
+            ELSE ContactNumber
+          END,
+          Email = CASE
+            WHEN @OverwriteExisting=1 AND @Email IS NOT NULL THEN @Email
+            WHEN @OverwriteExisting=0 AND (Email IS NULL OR LTRIM(RTRIM(Email))='') AND @Email IS NOT NULL THEN @Email
+            ELSE Email
+          END
+        OUTPUT INSERTED.EmployeeID, INSERTED.EmployeeCode, INSERTED.FirstName, INSERTED.LastName, INSERTED.Department, INSERTED.EmploymentStatus, INSERTED.BiometricStaffCode, INSERTED.BiometricUserID, INSERTED.ContactNumber, INSERTED.Email
+        WHERE EmployeeID=@EmployeeID
+      `)
+
+      const updatedEmployee = result.recordset?.[0] || null
+      if (!updatedEmployee) {
+        skipped++
+        continue
+      }
+
+      const changed =
+        String(updatedEmployee.FirstName || '') !== String(existing.FirstName || '') ||
+        String(updatedEmployee.LastName || '') !== String(existing.LastName || '') ||
+        String(updatedEmployee.Department || '') !== String(existing.Department || '') ||
+        String(updatedEmployee.EmploymentStatus || '') !== String(existing.EmploymentStatus || '') ||
+        String(updatedEmployee.BiometricStaffCode || '') !== String(existing.BiometricStaffCode || '') ||
+        String(updatedEmployee.BiometricUserID || '') !== String(existing.BiometricUserID || '') ||
+        String(updatedEmployee.ContactNumber || '') !== String(existing.ContactNumber || '') ||
+        String(updatedEmployee.Email || '') !== String(existing.Email || '')
+
+      if (changed) updated++
+      else unchanged++
+      registerEmployee(updatedEmployee)
+    }
+
+    await transaction.commit()
+
+    await writeAuditLog(pool, {
+      actor: resolveAuditActor(req, null),
+      action: 'IMPORT_EMPLOYEES_CSV',
+      tableName: 'Employees',
+      afterJson: JSON.stringify({
+        totalRows: allRows.length - 1,
+        uniqueEmployees: parsed.length,
+        created,
+        updated,
+        unchanged,
+        skipped,
+        overwriteExisting
+      }),
+      ipAddress: req.ip
+    })
+
+    res.json({
+      success: true,
+      totalRows: allRows.length - 1,
+      uniqueEmployees: parsed.length,
+      created,
+      updated,
+      unchanged,
+      skipped,
+      overwriteExisting
+    })
+  } catch (err) {
+    try {
+      if (transaction) await transaction.rollback()
+    } catch (_) {}
+    console.error(err)
+    const friendly = getEmployeeSaveErrorMessage(err)
+    if (friendly) return res.status(409).json({ error: friendly })
+    res.status(500).json({ error: err.message })
   }
 })
 

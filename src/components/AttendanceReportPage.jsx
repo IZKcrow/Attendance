@@ -65,6 +65,17 @@ function formatMinutesAsHoursMins(totalMinutes) {
   return `${hrs} ${hrs === 1 ? 'hr' : 'hrs'} ${String(mins).padStart(2, '0')} ${mins === 1 ? 'min' : 'mins'}`
 }
 
+function sortOvertimeEntries(entries) {
+  return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
+    const aStart = toMinutes(String(a?.StartTime || '').slice(0, 5))
+    const bStart = toMinutes(String(b?.StartTime || '').slice(0, 5))
+    if (aStart == null && bStart == null) return 0
+    if (aStart == null) return 1
+    if (bStart == null) return -1
+    return aStart - bStart
+  })
+}
+
 function isNonWorkingDayType(value) {
   const normalized = String(value || '').trim().toUpperCase()
   return normalized === 'HOLIDAY' || normalized === 'REST_DAY' || normalized === 'SPECIAL_NON_WORKING'
@@ -166,8 +177,17 @@ function getActualWorkIntervals(row) {
 }
 
 function getRequiredScheduleIntervals(row) {
+  const dateText = row.AttendanceDate || row.AttendanceDay || row.Date
   const specialDayType = String(row.SpecialDayType || '').trim().toUpperCase()
-  if (isNonWorkingDayType(specialDayType)) return []
+  const isWeekend = (() => {
+    const raw = fmtDate(dateText)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false
+    const date = new Date(`${raw}T00:00:00`)
+    if (Number.isNaN(date.getTime())) return false
+    const day = date.getDay()
+    return day === 0 || day === 6
+  })()
+  if (isNonWorkingDayType(specialDayType) || isWeekend) return []
 
   return [
     toInterval(row.RequiredMorningIn, row.RequiredMorningOut),
@@ -276,6 +296,7 @@ export default function AttendanceReportPage() {
   const [yearAnchor, setYearAnchor] = React.useState(new Date().getFullYear().toString())
   // Multi-select: empty array means "All"
   const [statusFilters, setStatusFilters] = React.useState([])
+  const [employeeFilter, setEmployeeFilter] = React.useState('')
   const [editRow, setEditRow] = React.useState(null)
   const [saving, setSaving] = React.useState(false)
 
@@ -365,9 +386,16 @@ export default function AttendanceReportPage() {
         const key = `${employeeId}:${date}`
         const bucket = overtimeByKey.get(key) || []
         bucket.push({
+          ...entry,
+          OvertimeEntryID: entry?.OvertimeEntryID || '',
           StartTime: entry?.StartTime || '',
           EndTime: entry?.EndTime || '',
-          ApprovedMinutes: Math.round(approvedMinutes)
+          ApprovedMinutes: Math.round(approvedMinutes),
+          ApprovedHours: entry?.ApprovedHours != null && entry?.ApprovedHours !== ''
+            ? String(entry.ApprovedHours)
+            : String((Math.round(approvedMinutes) / 60).toFixed(2)),
+          OvertimeType: entry?.OvertimeType || 'REGULAR',
+          Reason: entry?.Reason || ''
         })
         overtimeByKey.set(key, bucket)
       }
@@ -427,13 +455,22 @@ export default function AttendanceReportPage() {
 
   const openEdit = (row) => {
     if (!row) return
+    const overtimeEntries = sortOvertimeEntries(row.__ApprovedOvertimeEntries || [])
+    const primaryOvertime = overtimeEntries[0] || null
     setEditRow({
       ...row,
+      __ApprovedOvertimeEntries: overtimeEntries,
       AttendanceDate: fmtDate(row.AttendanceDate) === '-' ? '' : fmtDate(row.AttendanceDate),
       MorningTimeIn: toTimeInputValue(row.MorningTimeIn),
       MorningTimeOut: toTimeInputValue(row.MorningTimeOut),
       AfternoonTimeIn: toTimeInputValue(row.AfternoonTimeIn),
-      AfternoonTimeOut: toTimeInputValue(row.AfternoonTimeOut)
+      AfternoonTimeOut: toTimeInputValue(row.AfternoonTimeOut),
+      OvertimeStartTime: primaryOvertime?.StartTime || '',
+      OvertimeEndTime: primaryOvertime?.EndTime || '',
+      OvertimeApprovedHours: primaryOvertime?.ApprovedHours || '',
+      OvertimeType: primaryOvertime?.OvertimeType || 'REGULAR',
+      OvertimeReason: primaryOvertime?.Reason || '',
+      OvertimeEntryCount: overtimeEntries.length
     })
   }
 
@@ -446,7 +483,7 @@ export default function AttendanceReportPage() {
     setSaving(true)
     try {
       const clean = (v) => (v && v.trim() ? v.trim() : null)
-      await api.updateAttendanceRecord(editRow.AttendanceID, {
+      const updatedAttendance = await api.updateAttendanceRecord(editRow.AttendanceID, {
         EmployeeID: editRow.EmployeeID,
         AttendanceDate: editRow.AttendanceDate || null,
         MorningTimeIn: clean(editRow.MorningTimeIn),
@@ -454,6 +491,23 @@ export default function AttendanceReportPage() {
         AfternoonTimeIn: clean(editRow.AfternoonTimeIn),
         AfternoonTimeOut: clean(editRow.AfternoonTimeOut)
       })
+
+      const normalizedDate = fmtDate(editRow.AttendanceDate || updatedAttendance?.AttendanceDate)
+      const overtimeEntries = sortOvertimeEntries(editRow.__ApprovedOvertimeEntries || [])
+      const overtimePayload = {
+        EmployeeID: editRow.EmployeeID,
+        OvertimeDate: normalizedDate,
+        StartTime: clean(editRow.OvertimeStartTime),
+        EndTime: clean(editRow.OvertimeEndTime),
+        ApprovedHours: clean(editRow.OvertimeApprovedHours),
+        OvertimeType: editRow.OvertimeType || 'REGULAR',
+        Reason: clean(editRow.OvertimeReason)
+      }
+
+      if (overtimeEntries.length) {
+        await api.updateOvertimeEntry(overtimeEntries[0].OvertimeEntryID, overtimePayload)
+      }
+
       await loadRecords()
       setEditRow(null)
     } catch (err) {
@@ -487,6 +541,17 @@ export default function AttendanceReportPage() {
     { value: 'rest-day', label: 'Rest Day' }
   ]), [])
 
+  const employeeOptions = React.useMemo(() => {
+    const seen = new Map()
+    for (const row of records) {
+      const id = String(row?.EmployeeID || row?.employeeID || row?.EmployeeCode || row?.EmployeeName || '')
+      const name = String(row?.EmployeeName || row?.EmployeeCode || '').trim()
+      if (!id || !name || seen.has(id)) continue
+      seen.set(id, { id, name })
+    }
+    return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [records])
+
   const statusMatches = React.useCallback((statusText, filterValue) => {
     const s = String(statusText || '').toLowerCase()
     if (filterValue === 'on-time') return s.includes('on-time') || s === 'on time' || s === 'present'
@@ -502,6 +567,9 @@ export default function AttendanceReportPage() {
   }, [])
 
   const filtered = records.filter((r) => {
+    const employeeId = String(r.EmployeeID || r.employeeID || r.EmployeeCode || r.EmployeeName || '')
+    if (employeeFilter && employeeId !== employeeFilter) return false
+
     const active = Array.isArray(statusFilters) ? statusFilters.filter(Boolean) : []
     if (active.length === 0) return true // All
     const statusText = (r.AttendanceSummary || r.Status || '')
@@ -588,41 +656,6 @@ export default function AttendanceReportPage() {
         >
           Reset
         </Button>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto' }}>
-          <FormControl size="small" sx={{ minWidth: 240 }}>
-            <InputLabel id="status-multi">Status</InputLabel>
-            <Select
-              labelId="status-multi"
-              multiple
-              value={statusFilters}
-              label="Status"
-              onChange={(e) => {
-                const value = e.target.value
-                setStatusFilters(Array.isArray(value) ? value : [])
-              }}
-              renderValue={(selected) => {
-                const sel = Array.isArray(selected) ? selected : []
-                if (!sel.length) return 'All'
-                const map = new Map(statusOptions.map(o => [o.value, o.label]))
-                return sel.map(v => map.get(v) || v).join(', ')
-              }}
-              sx={{
-                background: 'var(--surface)',
-                borderRadius: 2,
-                '& fieldset': { borderColor: 'var(--border)' },
-                '&:hover fieldset': { borderColor: 'var(--primary)' },
-                '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
-              }}
-            >
-              {statusOptions.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>
-                  <Checkbox checked={statusFilters.indexOf(opt.value) > -1} />
-                  <ListItemText primary={opt.label} />
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -733,6 +766,85 @@ export default function AttendanceReportPage() {
                 }}
               />
             </Box>
+            <Box sx={{ mt: 2, p: 1.5, borderRadius: 2, border: '1px solid var(--border)', background: 'rgba(15, 98, 254, 0.03)' }}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} spacing={1} sx={{ mb: 1 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+                  Approved Overtime
+                </Typography>
+                {editRow.OvertimeEntryCount > 1 ? (
+                  <Chip
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    label={`Multiple OT entries found (${editRow.OvertimeEntryCount})`}
+                  />
+                ) : null}
+              </Stack>
+
+              <Typography variant="caption" sx={{ display: 'block', mb: 1.2, color: 'var(--muted)' }}>
+                Approved hours are managed in the Approved Overtime page. This screen only edits OT time window for an already-approved OT entry.
+                {editRow.OvertimeEntryCount > 1 ? ' Multiple OT entries exist for this date, so this editor updates the first OT entry only.' : ''}
+              </Typography>
+
+              {editRow.OvertimeEntryCount > 0 ? (
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(165px, 1fr))', gap: 1.2 }}>
+                  <FormControl size="small">
+                    <InputLabel id="attendance-ot-type-label">OT Type</InputLabel>
+                    <Select
+                      labelId="attendance-ot-type-label"
+                      label="OT Type"
+                      value={editRow.OvertimeType || 'REGULAR'}
+                      onChange={(e) => handleEditChange('OvertimeType', e.target.value)}
+                    >
+                      <MenuItem value="REGULAR">Regular</MenuItem>
+                      <MenuItem value="REST_DAY">Rest Day</MenuItem>
+                      <MenuItem value="HOLIDAY">Holiday</MenuItem>
+                      <MenuItem value="OTHER">Other</MenuItem>
+                    </Select>
+                  </FormControl>
+
+                  <TextField
+                    type="time"
+                    label="OT Window Start"
+                    size="small"
+                    value={editRow.OvertimeStartTime || ''}
+                    onChange={(e) => handleEditChange('OvertimeStartTime', e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    helperText="Edit OT time here when device OT punches are missing."
+                  />
+
+                  <TextField
+                    type="time"
+                    label="OT Window End"
+                    size="small"
+                    value={editRow.OvertimeEndTime || ''}
+                    onChange={(e) => handleEditChange('OvertimeEndTime', e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    helperText="Approved hours stays managed from the Approved Overtime page."
+                  />
+
+                  <TextField
+                    label="Approved Hours"
+                    size="small"
+                    value={editRow.OvertimeApprovedHours || ''}
+                    InputProps={{ readOnly: true }}
+                    helperText="Read-only here. Change this in Approved Overtime."
+                  />
+
+                  <TextField
+                    label="OT Reason / Reference"
+                    size="small"
+                    value={editRow.OvertimeReason || ''}
+                    onChange={(e) => handleEditChange('OvertimeReason', e.target.value)}
+                    sx={{ gridColumn: { xs: 'auto', md: '1 / -1' } }}
+                  />
+                </Box>
+              ) : (
+                <Typography variant="body2" sx={{ color: 'var(--muted)' }}>
+                  No approved OT entry exists for this date yet. Add the approved hours in the Approved Overtime page first, then come back here if you need to edit OT start/end time.
+                </Typography>
+              )}
+            </Box>
             <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
               <Button variant="outlined" size="small" onClick={() => setEditRow(null)}>
                 Cancel
@@ -753,6 +865,67 @@ export default function AttendanceReportPage() {
         error={error}
         primaryKeyField="AttendanceID"
         readOnly={true}
+        searchControls={
+          <>
+            <FormControl size="small" sx={{ minWidth: 240 }}>
+              <InputLabel id="employee-filter-select">Employee</InputLabel>
+              <Select
+                labelId="employee-filter-select"
+                value={employeeFilter}
+                label="Employee"
+                onChange={(e) => setEmployeeFilter(String(e.target.value || ''))}
+                sx={{
+                  background: 'var(--surface)',
+                  borderRadius: 2,
+                  '& fieldset': { borderColor: 'var(--border)' },
+                  '&:hover fieldset': { borderColor: 'var(--primary)' },
+                  '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
+                }}
+              >
+                <MenuItem value="">All employees</MenuItem>
+                {employeeOptions.map((employee) => (
+                  <MenuItem key={employee.id} value={employee.id}>
+                    {employee.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            <FormControl size="small" sx={{ minWidth: 240 }}>
+              <InputLabel id="status-multi">Status</InputLabel>
+              <Select
+                labelId="status-multi"
+                multiple
+                value={statusFilters}
+                label="Status"
+                onChange={(e) => {
+                  const value = e.target.value
+                  setStatusFilters(Array.isArray(value) ? value : [])
+                }}
+                renderValue={(selected) => {
+                  const sel = Array.isArray(selected) ? selected : []
+                  if (!sel.length) return 'All'
+                  const map = new Map(statusOptions.map(o => [o.value, o.label]))
+                  return sel.map(v => map.get(v) || v).join(', ')
+                }}
+                sx={{
+                  background: 'var(--surface)',
+                  borderRadius: 2,
+                  '& fieldset': { borderColor: 'var(--border)' },
+                  '&:hover fieldset': { borderColor: 'var(--primary)' },
+                  '&.Mui-focused fieldset': { borderColor: 'var(--primary)' }
+                }}
+              >
+                {statusOptions.map((opt) => (
+                  <MenuItem key={opt.value} value={opt.value}>
+                    <Checkbox checked={statusFilters.indexOf(opt.value) > -1} />
+                    <ListItemText primary={opt.label} />
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </>
+        }
         onAdd={() => {}}
         onEdit={() => {}}
         onDelete={() => {}}

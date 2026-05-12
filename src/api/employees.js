@@ -70,4 +70,23 @@ export async function bulkDeleteEmployees(ids) {
   return handleRes(res)
 }
 
-export default { fetchEmployees, createEmployee, updateEmployee, deleteEmployee, bulkDeleteEmployees }
+export async function importEmployeesCsv({
+  csvText,
+  createMissingEmployees = true,
+  overwriteExisting = false,
+  defaultPosition = 'Employee'
+}) {
+  const res = await fetch(`${BASE}/employees/import-csv`, {
+    method: 'POST',
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      CsvText: csvText,
+      CreateMissingEmployees: !!createMissingEmployees,
+      OverwriteExisting: !!overwriteExisting,
+      DefaultPosition: defaultPosition
+    })
+  })
+  return handleRes(res)
+}
+
+export default { fetchEmployees, createEmployee, updateEmployee, deleteEmployee, bulkDeleteEmployees, importEmployeesCsv }

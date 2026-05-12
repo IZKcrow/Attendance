@@ -721,7 +721,6 @@ export default function Scheduler() {
               <Chip label={`Name: ${selectedShift.ShiftName}`} />
               <Chip label={`AM: ${fmtTime(selectedShift.MorningTimeIn)} - ${fmtTime(selectedShift.MorningTimeOut)}`} />
               <Chip label={`PM: ${fmtTime(selectedShift.AfternoonTimeIn)} - ${fmtTime(selectedShift.AfternoonTimeOut)}`} />
-              <Chip label={`Grace: ${selectedShift.GracePeriodMinutes || 0} min`} />
               <Chip label={`Days: ${fmtDays(selectedShift)}`} />
             </Box>
           </Box>

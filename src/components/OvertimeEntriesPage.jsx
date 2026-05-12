@@ -198,7 +198,7 @@ export default function OvertimeEntriesPage() {
               Approved Overtime
             </Typography>
             <Typography variant="body2" sx={{ color: 'var(--muted)' }}>
-              Admins can encode only approved overtime so reports do not guess from raw punches.
+              Admins can encode approved overtime hours here. OT start/end times are edited from Attendance Records when needed.
               {!editingId ? ' You can assign the same overtime details to multiple employees in one save.' : ''}
             </Typography>
           </Box>
@@ -262,34 +262,15 @@ export default function OvertimeEntriesPage() {
 
           <TextField
             size="small"
-            label="Start Time"
-            type="time"
-            value={form.StartTime}
-            onChange={handleChange('StartTime')}
-            InputLabelProps={{ shrink: true }}
-            sx={inputSx}
-          />
-
-          <TextField
-            size="small"
-            label="End Time"
-            type="time"
-            value={form.EndTime}
-            onChange={handleChange('EndTime')}
-            InputLabelProps={{ shrink: true }}
-            sx={inputSx}
-          />
-
-          <TextField
-            size="small"
             label="Approved Hours"
             type="number"
             value={form.ApprovedHours}
             onChange={handleChange('ApprovedHours')}
             inputProps={{ min: 0, step: '0.25' }}
-            helperText="Optional if start and end time already define the duration."
+            helperText="Enter the approved OT hours here. OT start/end is edited in Attendance Records."
             sx={inputSx}
           />
+
         </Box>
 
         <TextField
@@ -325,11 +306,15 @@ export default function OvertimeEntriesPage() {
           { key: 'OvertimeType', label: 'Type' },
           { key: 'ApprovedHours', label: 'Approved Hours' },
           { key: 'Window', label: 'Window' },
+          { key: 'OfficialWindow', label: 'OT Punch' },
           { key: 'Reason', label: 'Reason' }
         ]}
         data={rows.map((row) => ({
           ...row,
-          Window: row.StartTime && row.EndTime ? `${row.StartTime} - ${row.EndTime}` : '-'
+          Window: row.StartTime && row.EndTime ? `${row.StartTime} - ${row.EndTime}` : '-',
+          OfficialWindow: row.OfficialPunchInTime && row.OfficialPunchOutTime
+            ? `${row.OfficialPunchInTime} - ${row.OfficialPunchOutTime}`
+            : '-'
         }))}
         loading={loading}
         primaryKeyField="OvertimeEntryID"
@@ -351,6 +336,7 @@ export default function OvertimeEntriesPage() {
             <TableCell>{row.OvertimeType}</TableCell>
             <TableCell>{row.ApprovedHours}</TableCell>
             <TableCell>{row.Window}</TableCell>
+            <TableCell>{row.OfficialWindow}</TableCell>
             <TableCell>{row.Reason || '-'}</TableCell>
           </>
         )}

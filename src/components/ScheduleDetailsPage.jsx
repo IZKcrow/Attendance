@@ -29,7 +29,6 @@ export default function ScheduleDetailsPage() {
 
   const [showForm, setShowForm] = useState(false)
   const [shiftName, setShiftName] = useState('')
-  const [grace, setGrace] = useState(15)
   const [groups, setGroups] = useState([defaultGroup(1)])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -55,7 +54,6 @@ export default function ScheduleDetailsPage() {
 
   const resetForm = () => {
     setShiftName('')
-    setGrace(15)
     setGroups([defaultGroup(1)])
     setError('')
     setSuccess('')
@@ -113,10 +111,8 @@ export default function ScheduleDetailsPage() {
     }
     try {
       setLoading(true)
-      const graceValue = parseInt(grace, 10) || 0
       await api.createShiftDefinition({
         ShiftName: shiftName.trim(),
-        GracePeriodMinutes: graceValue,
         Patterns: groups.map((g, i) => ({
           label: g.label?.trim() || `Pattern ${i + 1}`,
           days: g.days,
@@ -283,17 +279,6 @@ export default function ScheduleDetailsPage() {
               />
             </div>
 
-            <div className="schedule-field">
-              <label className="schedule-label">Grace Period (minutes)</label>
-              <input
-                type="number"
-                min="0"
-                value={grace}
-                onChange={(e) => setGrace(e.target.value)}
-                className="schedule-input"
-              />
-            </div>
-
             <div className="schedule-section">
               <h4 className="schedule-section-title">Day/Time Patterns</h4>
               <p className="schedule-helper">Define patterns of days with morning/afternoon times. Days cannot overlap between patterns.</p>
@@ -413,7 +398,6 @@ export default function ScheduleDetailsPage() {
               <div><strong>Days:</strong> {formatDayList(selectedPeriod.DayList, selectedPeriod.DayNameList)}</div>
               <div><strong>Morning:</strong> {formatSqlTime(selectedPeriod.MorningTimeIn)} - {formatSqlTime(selectedPeriod.MorningTimeOut)}</div>
               <div><strong>Afternoon:</strong> {formatSqlTime(selectedPeriod.AfternoonTimeIn)} - {formatSqlTime(selectedPeriod.AfternoonTimeOut)}</div>
-              <div><strong>Grace Period:</strong> {selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
               {Array.isArray(selectedPeriod.PatternDetails) && selectedPeriod.PatternDetails.length > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <strong style={{ color: 'var(--text)' }}>Patterns:</strong>
@@ -424,7 +408,6 @@ export default function ScheduleDetailsPage() {
                         <div className="schedule-pattern-subtle">Days: {p.DayNameList || formatDayList(p.DayList, '')}</div>
                         <div>Morning: {formatSqlTime(p.MorningTimeIn)} - {formatSqlTime(p.MorningTimeOut)}</div>
                         <div>Afternoon: {formatSqlTime(p.AfternoonTimeIn)} - {formatSqlTime(p.AfternoonTimeOut)}</div>
-                        <div className="schedule-pattern-subtle">Grace: {p.GracePeriodMinutes ?? selectedPeriod.GracePeriodMinutes ?? 5} minutes</div>
                       </div>
                     ))}
                   </div>

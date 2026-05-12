@@ -33,10 +33,12 @@ import SearchIcon from '@mui/icons-material/Search'
 import AddIcon from '@mui/icons-material/Add'
 import EditIcon from '@mui/icons-material/Edit'
 import DeleteIcon from '@mui/icons-material/Delete'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
 import EmployeeDialog from './EmployeeDialog'
 import * as api from '../api/employees'
 import { fetchEmployeeAssignments } from '../api'
 import { useSnackbar } from './ui/Snackbar'
+import { COMPANY_DEPARTMENTS } from '../constants/departments'
 
 function formatSqlTime(value) {
   if (!value) return '-'
@@ -130,11 +132,23 @@ export default function EmployeeTable() {
   const [viewLoading, setViewLoading] = React.useState(false)
   const [selectedIds, setSelectedIds] = React.useState(() => new Set())
   const [deleting, setDeleting] = React.useState(false)
+  const [importDialogOpen, setImportDialogOpen] = React.useState(false)
+  const [pendingImport, setPendingImport] = React.useState(null)
+  const [importing, setImporting] = React.useState(false)
+  const importFileInputRef = React.useRef(null)
 
-  const departments = React.useMemo(() => [
-    'All',
-    ...Array.from(new Set(employees.map(e => e.department)))
-  ], [employees])
+  const departments = React.useMemo(() => {
+    const extraDepartments = Array.from(
+      new Set(
+        employees
+          .map((e) => String(e.department || '').trim())
+          .filter(Boolean)
+          .filter((value) => !COMPANY_DEPARTMENTS.includes(value))
+      )
+    )
+
+    return ['All', ...COMPANY_DEPARTMENTS, ...extraDepartments]
+  }, [employees])
 
   React.useEffect(() => {
     let mounted = true
@@ -365,9 +379,252 @@ export default function EmployeeTable() {
     })
   }
 
+  const handleImportClick = () => {
+    if (importFileInputRef.current) {
+      importFileInputRef.current.value = ''
+      importFileInputRef.current.click()
+    }
+  }
+
+  const handleImportFileChange = async (event) => {
+    const file = event?.target?.files?.[0] || null
+    if (!file) return
+
+    try {
+      const csvText = await file.text()
+      setPendingImport({
+        csvText,
+        filename: file.name || 'Employee CSV'
+      })
+      setImportDialogOpen(true)
+    } catch (err) {
+      setError(err.message)
+      show(`${err.message || 'Employee import failed'}`, 'error')
+    }
+  }
+
+  const closeImportDialog = React.useCallback(() => {
+    if (importing) return
+    setImportDialogOpen(false)
+    setPendingImport(null)
+  }, [importing])
+
+  const runEmployeeImport = React.useCallback(async (mode) => {
+    if (!pendingImport?.csvText) return
+
+    const overwriteExisting = mode === 'refresh-existing'
+
+    try {
+      setImporting(true)
+      const result = await api.importEmployeesCsv({
+        csvText: pendingImport.csvText,
+        createMissingEmployees: true,
+        overwriteExisting,
+        defaultPosition: 'Employee'
+      })
+
+      const beforeCount = Array.isArray(employees) ? employees.length : 0
+      const refreshed = await api.fetchEmployees()
+      const afterCount = Array.isArray(refreshed) ? refreshed.length : 0
+      setEmployees(Array.isArray(refreshed) ? refreshed : [])
+      setSelectedIds(new Set())
+      setQuery('')
+      setDepartment('All')
+      setPage(0)
+      setError(null)
+      setImportDialogOpen(false)
+      setPendingImport(null)
+
+      show(
+        `Employee import complete. Before: ${beforeCount}, after: ${afterCount}, created: ${result?.created ?? 0}, updated: ${result?.updated ?? 0}, unchanged: ${result?.unchanged ?? 0}, skipped: ${result?.skipped ?? 0}.`,
+        'success'
+      )
+    } catch (err) {
+      setError(err.message)
+      show(`${err.message || 'Employee import failed'}`, 'error')
+    } finally {
+      setImporting(false)
+    }
+  }, [pendingImport, show])
+
   return (
     <>
       {SnackbarComponent}
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".csv,text/csv,.txt"
+        style={{ display: 'none' }}
+        onChange={handleImportFileChange}
+      />
+      <Dialog
+        open={importDialogOpen}
+        onClose={closeImportDialog}
+        fullWidth
+        maxWidth="md"
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            overflow: 'hidden'
+          }
+        }}
+      >
+        <DialogTitle sx={{ fontWeight: 800 }}>
+          Import Employee Master Data
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" sx={{ color: 'text.secondary', mb: 2 }}>
+            <strong>{pendingImport?.filename || 'This file'}</strong> can be imported directly from your Excel export.
+            We will use the employee columns and ignore the attendance-only columns.
+          </Typography>
+
+         <Box
+  sx={{
+    display: 'grid',
+    gap: 1.5,
+    gridTemplateColumns: { xs: '1fr', md: '1.2fr 0.8fr' },
+    mb: 2
+  }}
+>
+  {/* LEFT BOX */}
+  <Box
+    sx={{
+      p: 2,
+      borderRadius: 2,
+      border: '1px solid',
+      borderColor: '#bfdbfe',
+      background: 'linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%)'
+    }}
+  >
+    <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1d4ed8', mb: 1 }}>
+      Columns Used For Employees
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#1e3a8a', mb: 0.75 }}>
+      <code>Staff Code</code> → <code>BiometricStaffCode</code> and employee matching
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#1e3a8a', mb: 0.75 }}>
+      <code>Name</code> → <code>FirstName</code> and <code>LastName</code>
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#1e3a8a', mb: 0.75 }}>
+      <code>Department</code> → <code>Department</code>
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#1e3a8a' }}>
+      <code>User ID</code> → <code>BiometricUserID</code>
+    </Typography>
+  </Box>
+
+  {/* RIGHT BOX */}
+  <Box
+    sx={{
+      p: 2,
+      borderRadius: 2,
+      border: '1px solid',
+      borderColor: '#d1d5db',
+      background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)'
+    }}
+  >
+    <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#0f172a', mb: 1 }}>
+      Ignored In Employee Import
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#475569', mb: 0.75 }}>
+      <code>Week</code>
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#475569', mb: 0.75 }}>
+      <code>Date</code>
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#475569', mb: 0.75 }}>
+      <code>Time</code>
+    </Typography>
+
+    <Typography variant="body2" sx={{ color: '#475569' }}>
+      <code>Machine ID</code>
+    </Typography>
+  </Box>
+</Box>
+
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 1.5,
+              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }
+            }}
+          >
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 2,
+                border: '1px solid',
+                borderColor: '#c7d2fe',
+                background: 'linear-gradient(180deg, #eef2ff 0%, #f8fafc 100%)'
+              }}
+            >
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#312e81', mb: 0.5 }}>
+                Safe Import
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#4338ca', mb: 2 }}>
+                Best for the first load or when you only want to add missing employees and fill empty fields without replacing current names or departments.
+              </Typography>
+              <Button
+                fullWidth
+                variant="contained"
+                onClick={() => runEmployeeImport('safe-import')}
+                disabled={importing}
+                sx={{
+                  background: '#4338ca',
+                  ':hover': { background: '#3730a3' }
+                }}
+              >
+                Add Missing Employees
+              </Button>
+            </Box>
+
+            <Box
+              sx={{
+                p: 2,
+                borderRadius: 2,
+                border: '1px solid',
+                borderColor: '#93c5fd',
+                background: 'linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%)'
+              }}
+            >
+              <Typography variant="subtitle1" sx={{ fontWeight: 700, color: '#1d4ed8', mb: 0.5 }}>
+                Refresh Existing Profiles
+              </Typography>
+              <Typography variant="body2" sx={{ color: '#1e40af', mb: 2 }}>
+                Best when the Excel export has newer names, departments, staff codes, or user IDs and you want those values to replace existing employee profile data.
+              </Typography>
+              <Button
+                fullWidth
+                variant="outlined"
+                onClick={() => runEmployeeImport('refresh-existing')}
+                disabled={importing}
+                sx={{
+                  borderColor: '#60a5fa',
+                  color: '#1d4ed8',
+                  ':hover': {
+                    borderColor: '#2563eb',
+                    background: 'rgba(37,99,235,0.06)'
+                  }
+                }}
+              >
+                Update Existing Employees
+              </Button>
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, py: 2 }}>
+          <Button onClick={closeImportDialog} disabled={importing}>
+            Cancel
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
           <TextField
@@ -447,6 +704,14 @@ export default function EmployeeTable() {
                 <DeleteIcon />
               </IconButton>
             </span>
+          </Tooltip>
+          <Tooltip title="Import employees from a CSV exported by Excel">
+            <IconButton
+              onClick={handleImportClick}
+              sx={{ color: 'var(--primary)', background: 'rgba(37,99,235,0.12)', '&:hover': { background: 'rgba(37,99,235,0.2)' } }}
+            >
+              <UploadFileIcon />
+            </IconButton>
           </Tooltip>
           <IconButton
             onClick={openAdd}

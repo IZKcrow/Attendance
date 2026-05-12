@@ -284,6 +284,7 @@ export async function updateAttendanceRecord(id, data) {
     MorningTimeOut: data?.MorningTimeOut || data?.morningOut || null,
     AfternoonTimeIn: data?.AfternoonTimeIn || data?.afternoonIn || null,
     AfternoonTimeOut: data?.AfternoonTimeOut || data?.afternoonOut || null,
+    Remarks: data?.Remarks ?? data?.remarks ?? null,
     EmployeeID: data?.EmployeeID || data?.employeeID || null
   }
   let res = await fetch(`${BASE}/attendance/${id}`, {
@@ -459,7 +460,9 @@ export async function importDeviceAttendanceCsv({
   deviceCode,
   csvText,
   createMissingEmployees = false,
-  overwriteExisting = false
+  overwriteExisting = false,
+  updateEmployeeProfiles = false,
+  overwriteEmployeeProfiles = false
 }) {
   const res = await fetch(`${BASE}/devices/import-attendance-csv`, {
     method: 'POST',
@@ -468,7 +471,9 @@ export async function importDeviceAttendanceCsv({
       DeviceCode: deviceCode,
       CsvText: csvText,
       CreateMissingEmployees: !!createMissingEmployees,
-      OverwriteExisting: !!overwriteExisting
+      OverwriteExisting: !!overwriteExisting,
+      UpdateEmployeeProfiles: !!updateEmployeeProfiles,
+      OverwriteEmployeeProfiles: !!overwriteEmployeeProfiles
     })
   })
   return handleRes(res)

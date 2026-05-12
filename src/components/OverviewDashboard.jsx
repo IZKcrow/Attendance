@@ -41,6 +41,7 @@ import {
   BarElement
 } from 'chart.js'
 import * as api from '../api'
+import { getDepartmentShortLabel } from '../constants/departments'
 
 ChartJS.register(Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, BarElement)
 
@@ -187,16 +188,7 @@ function computeComparisonStats(records, refNow = new Date()) {
       continue
     }
 
-    const grace = Number(raw.GracePeriodMinutes ?? raw.gracePeriodMinutes ?? 0) || 0
-    const minMorningIn = hhmmToMinutes(raw.MorningTimeIn)
-    const minReqMorningIn = hhmmToMinutes(raw.RequiredMorningIn)
-    const minAfternoonIn = hhmmToMinutes(raw.AfternoonTimeIn)
-    const minReqAfternoonIn = hhmmToMinutes(raw.RequiredAfternoonIn)
-    const lateByTimes =
-      (minMorningIn !== null && minReqMorningIn !== null && minMorningIn > (minReqMorningIn + grace)) ||
-      (minAfternoonIn !== null && minReqAfternoonIn !== null && minAfternoonIn > (minReqAfternoonIn + grace))
-
-    if (summary.includes('late') || lateByTimes || (raw.MinutesLate || 0) > 0 || flags.late) {
+    if (summary.includes('late') || (raw.MinutesLate || 0) > 0 || flags.late) {
       late += 1
       continue
     }
@@ -375,6 +367,7 @@ export default function OverviewDashboard({ onOpenAttendanceReport }) {
       const logged = present[label] || 0
       return {
         label,
+        shortLabel: getDepartmentShortLabel(label),
         total,
         logged,
         percent: Math.min(100, Math.round((logged / total) * 100))
@@ -401,7 +394,7 @@ export default function OverviewDashboard({ onOpenAttendanceReport }) {
       })
     }
 
-    const labels = top.map((r) => `${r.label} (${r.logged}/${r.total})`)
+    const labels = top.map((r) => `${r.shortLabel || r.label} (${r.logged}/${r.total})`)
     const percents = top.map((r) => r.percent)
     return { labels, percents, totals, present, ranked }
   }, [employees, todayRecords])
@@ -409,7 +402,7 @@ export default function OverviewDashboard({ onOpenAttendanceReport }) {
   const filteredRankedDepartments = React.useMemo(() => {
     const q = deptQuery.trim().toLowerCase()
     let rows = (deptAttendance.ranked || []).filter((r) =>
-      !q || r.label.toLowerCase().includes(q)
+      !q || r.label.toLowerCase().includes(q) || String(r.shortLabel || '').toLowerCase().includes(q)
     )
     switch (deptSort) {
       case 'name-asc':
@@ -725,7 +718,7 @@ export default function OverviewDashboard({ onOpenAttendanceReport }) {
             <Box component="tbody">
               {filteredRankedDepartments.map((r) => (
                 <Box component="tr" key={r.label}>
-                  <Box component="td" sx={{ p: 1, borderBottom: `1px solid ${accent.border}` }}>{r.label}</Box>
+                  <Box component="td" sx={{ p: 1, borderBottom: `1px solid ${accent.border}` }}>{r.shortLabel || r.label}</Box>
                   <Box component="td" sx={{ p: 1, borderBottom: `1px solid ${accent.border}` }}>{r.logged}/{r.total}</Box>
                   <Box component="td" sx={{ p: 1, borderBottom: `1px solid ${accent.border}` }}>{r.percent}%</Box>
                 </Box>

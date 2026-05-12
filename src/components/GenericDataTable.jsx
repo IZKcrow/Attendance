@@ -83,7 +83,8 @@ export default function GenericDataTable({
   showRowDelete = false,
   canDeleteRow = null,
   canEditRow = null,
-  actionsLabel = 'Actions'
+  actionsLabel = 'Actions',
+  searchControls = null
 }) {
   const { show, SnackbarComponent } = useSnackbar()
   // Per-row delete is intentionally hidden (bulk deletion is used instead).
@@ -256,6 +257,7 @@ export default function GenericDataTable({
             '& .MuiOutlinedInput-input': { paddingY: 1.2 }
           }}
         />
+        {searchControls}
       </Box>
 
       {error && !dismissedError && (

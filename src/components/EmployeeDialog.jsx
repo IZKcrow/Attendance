@@ -7,25 +7,35 @@ import {
   DialogActions,
   Button,
   TextField,
-  Grid
+  Grid,
+  MenuItem
 } from '@mui/material'
+import { COMPANY_DEPARTMENTS, isKnownDepartment } from '../constants/departments'
+
+const EMPTY_FORM = {
+  id: null,
+  name: '',
+  position: '',
+  department: '',
+  biometricStaffCode: '',
+  biometricUserId: '',
+  email: '',
+  phone: ''
+}
+
+function normalizeForm(initial) {
+  const next = { ...EMPTY_FORM, ...(initial || {}) }
+  next.department = isKnownDepartment(next.department) ? next.department : ''
+  return next
+}
 
 export default function EmployeeDialog({ open, onClose, onSave, initial }) {
-  const [form, setForm] = React.useState(() => ({
-    id: null,
-    name: '',
-    position: '',
-    department: '',
-    biometricStaffCode: '',
-    biometricUserId: '',
-    email: '',
-    phone: ''
-  }))
+  const [form, setForm] = React.useState(() => normalizeForm())
   const [saving, setSaving] = React.useState(false)
 
   React.useEffect(() => {
-    if (initial) setForm(initial)
-    else setForm({ id: null, name: '', position: '', department: '', biometricStaffCode: '', biometricUserId: '', email: '', phone: '' })
+    if (initial) setForm(normalizeForm(initial))
+    else setForm(normalizeForm())
   }, [initial, open])
 
   const handleChange = (key) => (e) => setForm(prev => ({ ...prev, [key]: e.target.value }))
@@ -53,7 +63,18 @@ export default function EmployeeDialog({ open, onClose, onSave, initial }) {
             <TextField fullWidth label="Position" value={form.position} onChange={handleChange('position')} />
           </Grid>
           <Grid item xs={12} sm={6}>
-            <TextField fullWidth label="Department" value={form.department} onChange={handleChange('department')} />
+            <TextField
+              select
+              fullWidth
+              label="Department"
+              value={form.department || ''}
+              onChange={handleChange('department')}
+            >
+              <MenuItem value="">Select department</MenuItem>
+              {COMPANY_DEPARTMENTS.map((department) => (
+                <MenuItem key={department} value={department}>{department}</MenuItem>
+              ))}
+            </TextField>
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField
